@@ -1,0 +1,34 @@
+[
+  {
+    "Signal Name": "LHMPWC1",
+    "Msg ID": "0x0A5",
+    "Siganl Name1": "ABM_CrashTyp",
+    "Siganl Name2": "ABM_CrashTypSply",
+    "Siganl Name3": "ABM_IMU_LateralAcceleration",
+    "Siganl Name4": "ABM_IMU_LateralAccValid"
+  },
+  {
+    "Signal Name": "LHMPWD2",
+    "Msg ID": "0x0AD",
+    "Siganl Name1": "ABM_CrashTyp",
+    "Siganl Name2": "ABM_CrashTypSply",
+    "Siganl Name3": "ABM_IMU_LateralAcceleration",
+    "Siganl Name4": "ABM_IMU_LateralAccValid"
+  },
+  {
+    "Signal Name": "LHMPWC2",
+    "Msg ID": "0x0AE",
+    "Siganl Name1": "ABM_CrashTyp",
+    "Siganl Name2": "ABM_CrashTypSply",
+    "Siganl Name3": "ABM_IMU_LateralAcceleration",
+    "Siganl Name4": "ABM_IMU_LateralAccValid"
+  },
+  {
+    "Signal Name": "LHMPWD3",
+    "Msg ID": "0x0A4",
+    "Siganl Name1": "ABM_CrashTyp",
+    "Siganl Name2": "ABM_CrashTypSply",
+    "Siganl Name3": "ABM_IMU_LateralAcceleration",
+    "Siganl Name4": "ABM_IMU_LateralAccValid"
+  }
+]
