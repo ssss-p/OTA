@@ -1,4 +1,5 @@
 *.pytest_cache
+*.idea
 __pycache__/
 blf_logs/
 logs/
