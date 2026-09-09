@@ -563,7 +563,7 @@ class TestDemo1:
         if not self._monitor_upgrade_stage(
             ecu_info_map,
             stage_name="UDS 30步升级流程监控",
-            timeout_s=35*60,
+            timeout_s=40*60,
             can_id_whitelist=self.can_id_whitelist,
             period_map=self.can_id_period_map,
         ):

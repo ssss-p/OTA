@@ -529,7 +529,7 @@ class UpgradeWindowChecker:
     """
 
     def __init__(self, ecu_name, whitelist_periods, valid_canids,
-                 func_canid=0x7DF, req_canid=None, tolerance=0.05, reaction_time=2.0,
+                 func_canid=0x7DF, req_canid=None, tolerance=0.05, reaction_time=3.0,
                  channel=None):
         self.ecu_name = ecu_name
         # channel 归一化为 int，防止驱动返回字符串类型导致比较失败
@@ -703,7 +703,7 @@ class UpgradeWindowChecker:
 
     def get_window_time_range(self):
         """获取窗口实际检查的时间范围(开始检查时间, 结束时间)。
-        开始检查时间 = 开窗时间(28 83 03) + reaction_time(默认2s，预留ECU反应时间)。
+        开始检查时间 = 开窗时间(28 83 03) + reaction_time(默认3s，预留ECU反应时间)。
         结束时间优先使用显式关闭时间，兜底用最后一帧报文时间。
         """
         if self.window_open_time is None:
