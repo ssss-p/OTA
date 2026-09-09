@@ -265,7 +265,7 @@ class TestDemo1:
             for c in wl:
                 bl[c] = period_map.get(c)
 
-        # 每条总线一个窗口检查器（整条总线共享，每对 28 83 03/28 80 03 判定一次）
+        # 每条总线一个窗口检查器（整条总线共享，每对 28 83 03/71 01 FF 01 00 判定一次）
         bus_checkers = {}
         for resp_canid, info in ecu_info_map.items():
             bus_name = info["bus_name"]
@@ -367,13 +367,13 @@ class TestDemo1:
                                 chk.set_step_gate(True)
                                 break
 
-                # 2. 让 chk.process 先处理报文——优先精确检测 28 83 03(开窗) 和 28 80 03(关窗) 帧
-                #    此时 step_gate 已正确置位，不会用旧缓存开窗；28 80 03 能被正确识别记录精确关窗时间
+                # 2. 让 chk.process 先处理报文——优先精确检测 28 83 03(开窗) 和 71 01 FF 01 00(关窗) 帧
+                #    此时 step_gate 已正确置位，不会用旧缓存开窗；71 01 FF 01 00 能被正确识别记录精确关窗时间
                 for bus_name, chk in bus_checkers.items():
                     if all_msgs:
                         chk.process(all_msgs)
 
-                # 3. 兜底关窗：只有当 chk 还没通过 28 80 03 帧关窗，且本总线上
+                # 3. 兜底关窗：只有当 chk 还没通过 71 01 FF 01 00 帧关窗，且本总线上
                 #    所有 ECU 都已过窗口阶段（没有任何 ECU 处于 0 < step < 25，
                 #    即没有 ECU 正在 5~24 步之间）时才兜底。
                 #    注意：同总线顺序升级时，第1个 ECU 完成后 current_step=30>=24，

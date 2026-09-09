@@ -518,8 +518,8 @@ class UpgradeWindowChecker:
     """
     单个 ECU 的 UDS 升级"第5步~第24步"窗口白名单/黑名单检查器。
 
-    收到第5步请求帧 (28 83 03, 功能寻址) 时打开窗口，收到第24步请求帧
-    (28 80 03, 功能寻址) 时关闭窗口。窗口内对整条总线报文做检查：
+    收到第5步请求帧 (28 83 03, 功能寻址) 时打开窗口，收到第23步检查编程
+    依赖性正响应 (71 01 FF 01 00) 时关闭窗口。窗口内对整条总线报文做检查：
     - 白名单(该 ECU 的 CANID 列, 带周期): 全部须出现, 配了周期的须符合周期
     - 黑名单(不在 {req, resp, 白名单, 0x7DF} 的 CANID): 窗口内不能出现
 
@@ -548,9 +548,9 @@ class UpgradeWindowChecker:
             self.boundary_canids.add(req_canid)
         self.opened = False
         self.closed = False
-        self.phase = 0  # 已开启的升级窗口段数（每个ECU阶段各一对 28 83 03/28 80 03）
+        self.phase = 0  # 已开启的升级窗口段数（每个ECU阶段各一对 28 83 03/71 01 FF 01 00）
         self.window_open_time = None  # 收到28 83 03的时间戳
-        self.window_close_time = None  # 窗口关闭时间戳（收到第24步或兜底判定时）
+        self.window_close_time = None  # 窗口关闭时间戳（收到71 01 FF 01 00或兜底判定时）
         self.last_msg_time = None  # 处理的最后一帧报文时间（用于兜底判定）
         self.seen = set()
         self.times = defaultdict(list)
@@ -579,7 +579,7 @@ class UpgradeWindowChecker:
         """处理一轮报文：检测窗口边界，并在窗口内(含反应时间之后)累积白名单/黑名单信息。
         窗口边界直接由 UDS 报文帧检测，时间戳最准确：
         - 开窗帧: 28 83 03（功能寻址，禁止非诊断报文发送），对应第5步
-        - 关窗帧: 28 80 03（功能寻址，恢复正常通讯），对应第24步
+        - 关窗帧: 71 01 FF 01 00（检查编程依赖性 31 01 FF 01 的正响应），对应第23步
         """
         for msg in msgs:
             mid = msg.get("id")
@@ -603,16 +603,19 @@ class UpgradeWindowChecker:
                 continue
             self.last_msg_time = t
             p = self._payload(data)
-            # 窗口边界检测：直接通过 UDS 功能寻址帧判定，时间戳精确
-            if p and mid in self.boundary_canids and len(p) >= 3:
-                if p[:3] == [0x28, 0x83, 0x03] and (not self.opened or self.closed):
-                    # 开窗帧：28 83 03（需满足前4步完成 step_gate）
+            # 窗口边界检测：直接通过 UDS 报文帧判定，时间戳精确
+            if p and len(p) >= 3:
+                if mid in self.boundary_canids and p[:3] == [0x28, 0x83, 0x03] and (not self.opened or self.closed):
+                    # 开窗帧：28 83 03 功能寻址请求（需满足前4步完成 step_gate）
                     self.comm_control_seen = True
                     self._pending_open_time = t
                     if self.step_gate:
                         self._do_open_window(t)
-                elif p[:3] == [0x28, 0x80, 0x03] and self.opened and not self.closed:
-                    # 关窗帧：28 80 03（恢复通讯，对应第24步，无需依赖外部步骤判断，时间戳精确）
+                elif (len(p) >= 5 and p[:5] == [0x71, 0x01, 0xFF, 0x01, 0x00]
+                      and self.opened and not self.closed):
+                    # 关窗帧：71 01 FF 01 00（检查编程依赖性 31 01 FF 01 的正响应，
+                    # 对应第23步。由被升级 ECU 的 resp CANID 物理寻址发出，
+                    # 不在 boundary_canids 中，故只按有效载荷识别）
                     self.closed = True
                     self.window_close_time = t
                     # 关窗时刻立即快照本段判定结果——同一批报文中若紧跟下一个
