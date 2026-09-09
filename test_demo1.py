@@ -394,18 +394,19 @@ class TestDemo1:
                         if not any_in_window:
                             chk.set_end_step(True)
 
-                # 每对 28 83 03/28 80 03（每个 ECU 阶段各一对）判定一次
+                # 每段(每个ECU)窗口结果：关窗时刻已在 chk 内部快照（数据不被下一个
+                # ECU 开窗清空），这里逐段取出打印，保证每段窗口时间独立准确
                 for bus_name, chk in bus_checkers.items():
-                    if chk.closed and not chk.verdict_logged:
-                        passed, reasons = chk.evaluate()
-                        chk.verdict_logged = True
-                        start_t, end_t = chk.get_window_time_range()
-                        time_range_str = f" [窗口时间: {start_t:.6f}s ~ {end_t:.6f}s]" if start_t is not None and end_t is not None else ""
-                        label = f"[{bus_name}] 升级窗口第{chk.phase}段(5~23步){time_range_str}"
-                        if passed:
+                    for res in chk.pop_unreported_results():
+                        time_range_str = (
+                            f" [窗口时间: {res['start']:.6f}s ~ {res['end']:.6f}s]"
+                            if res["start"] is not None and res["end"] is not None else ""
+                        )
+                        label = f"[{bus_name}] 升级窗口第{res['phase']}段(5~23步){time_range_str}"
+                        if res["passed"]:
                             log_info(f"{label}检查 PASS: 白名单均出现且按周期发送, 无黑名单")
                         else:
-                            for r in reasons:
+                            for r in res["reasons"]:
                                 log_error_continue(f"{label}检查 FAIL: {r}")
 
                 for ecu_name, ecu_info in ecu_monitors.items():
@@ -482,18 +483,19 @@ class TestDemo1:
 
                 time.sleep(0.5)
 
-            # 兜底：窗口已打开但未收到第24步（超时/提前结束）也判定一次
+            # 兜底：窗口已打开但未收到关窗帧（超时/提前结束）也判定一次
             for bus_name, chk in bus_checkers.items():
-                if chk.opened and not chk.verdict_logged:
-                    passed, reasons = chk.evaluate()
-                    chk.verdict_logged = True
-                    start_t, end_t = chk.get_window_time_range()
-                    time_range_str = f" [窗口时间: {start_t:.6f}s ~ {end_t:.6f}s]" if start_t is not None and end_t is not None else ""
-                    label = f"[{bus_name}] 升级窗口第{chk.phase}段(5~23步){time_range_str}"
-                    if passed:
+                chk.finalize()
+                for res in chk.pop_unreported_results():
+                    time_range_str = (
+                        f" [窗口时间: {res['start']:.6f}s ~ {res['end']:.6f}s]"
+                        if res["start"] is not None and res["end"] is not None else ""
+                    )
+                    label = f"[{bus_name}] 升级窗口第{res['phase']}段(5~23步){time_range_str}"
+                    if res["passed"]:
                         log_info(f"{label}检查 PASS: 白名单均出现且按周期发送, 无黑名单")
                     else:
-                        for r in reasons:
+                        for r in res["reasons"]:
                             log_error_continue(f"{label}检查 FAIL: {r}")
 
             # # 液冷报文 0x111 全程周期检查（整个运行过程，周期100ms±10%）
@@ -561,7 +563,7 @@ class TestDemo1:
         if not self._monitor_upgrade_stage(
             ecu_info_map,
             stage_name="UDS 30步升级流程监控",
-            timeout_s=40*60,
+            timeout_s=35*60,
             can_id_whitelist=self.can_id_whitelist,
             period_map=self.can_id_period_map,
         ):
@@ -570,4 +572,3 @@ class TestDemo1:
 
 
         log_info("=== 所有 ECU 升级完成，test_01 执行结束 ===")
-

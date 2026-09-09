@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from common.logger import log_info, log_error_continue
+from common.logger import log_info
 
 
 def build_can_id_whitelist(general_list):
@@ -438,7 +438,7 @@ def check_high_voltage_signal(msg_getter, high_voltage_canid=0x343, timeout_minu
         message: str，说明信息
     """
     import time
-    from common.logger import log_info, log_error_continue
+    from common.logger import log_info
 
     start_time = time.time()
     timeout_seconds = timeout_minutes * 60
@@ -478,7 +478,7 @@ def monitor_liquid_cooling_signal(messages, liquid_cooling_canid=0x181, period_m
         prev_time: float or None，上一帧时间（秒）
         next_time: float or None，下一帧时间（秒）
     """
-    from common.logger import log_info, log_error_continue
+    from common.logger import log_info
 
     # 过滤目标 CANID 的报文并按时间排序
     msgs = sorted(
@@ -529,7 +529,7 @@ class UpgradeWindowChecker:
     """
 
     def __init__(self, ecu_name, whitelist_periods, valid_canids,
-                 func_canid=0x7DF, req_canid=None, tolerance=0.05, reaction_time=3.0,
+                 func_canid=0x7DF, req_canid=None, tolerance=0.05, reaction_time=2.0,
                  channel=None):
         self.ecu_name = ecu_name
         # channel 归一化为 int，防止驱动返回字符串类型导致比较失败
@@ -559,7 +559,10 @@ class UpgradeWindowChecker:
         self.step_gate = False  # 前4步是否完成（外部设置）
         self.comm_control_seen = False  # 是否已收到 28 83 03
         self._pending_open_time = None  # step_gate 打开前缓存的 28 83 03 时间戳
-        self.verdict_logged = False  # 当前段判定是否已打印（每对 28 83 03/28 80 03 打印一次）
+        # 每段(每个ECU)窗口的判定快照：关窗时刻立即记录，避免被下一个 ECU 开窗时清空
+        # 元素: {"phase": int, "start": float|None, "end": float|None, "passed": bool|None, "reasons": list}
+        self.phase_results = []
+        self._reported_count = 0  # 已被外部取走的快照数量
 
     @staticmethod
     def _payload(data):
@@ -612,9 +615,9 @@ class UpgradeWindowChecker:
                     # 关窗帧：28 80 03（恢复通讯，对应第24步，无需依赖外部步骤判断，时间戳精确）
                     self.closed = True
                     self.window_close_time = t
-                    # 关窗时刻立即打印本段判定：若同一批报文中紧跟下一个 ECU 的
-                    # 开窗帧，本段数据会被 _do_open_window 清空，结果必须先输出
-                    self._log_verdict()
+                    # 关窗时刻立即快照本段判定结果——同一批报文中若紧跟下一个
+                    # ECU 的开窗帧，本段数据会被 _do_open_window 清空导致结果丢失
+                    self._snapshot_phase(t)
             # 窗口内累积（收到28 83 03后预留 reaction_time 秒 ECU 反应时间）
             if self.opened and not self.closed and self._in_check_window(t):
                 if mid in self.whitelist_periods:
@@ -669,29 +672,7 @@ class UpgradeWindowChecker:
         if reached and self.opened and not self.closed:
             self.closed = True
             self.window_close_time = close_time if close_time is not None else self.last_msg_time
-            self._log_verdict()
-
-    def _log_verdict(self):
-        """关窗时刻立即打印本段判定结果（每对 28 83 03/28 80 03 打印一次）。
-
-        必须在数据被下一个 ECU 开窗清空之前输出；verdict_logged 标志
-        防止 test_demo1.py 循环末尾的判定块重复打印同一段。
-        """
-        if self.verdict_logged or not self.opened:
-            return
-        self.verdict_logged = True
-        passed, reasons = self.evaluate()
-        start_t, end_t = self.get_window_time_range()
-        time_range_str = (
-            f" [窗口时间: {start_t:.6f}s ~ {end_t:.6f}s]"
-            if start_t is not None and end_t is not None else ""
-        )
-        label = f"[{self.ecu_name}] 升级窗口第{self.phase}段(5~23步){time_range_str}"
-        if passed:
-            log_info(f"{label}检查 PASS: 白名单均出现且按周期发送, 无黑名单")
-        else:
-            for r in reasons:
-                log_error_continue(f"{label}检查 FAIL: {r}")
+            self._snapshot_phase(self.window_close_time)
 
     def _snapshot_phase(self, end_time):
         """关窗时刻快照本段(当前ECU)的判定结果到 phase_results。
