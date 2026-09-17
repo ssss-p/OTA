@@ -55,7 +55,7 @@ class CANDevice:
             "product": "TSMaster",
         }]
 
-    def connect(self, channel_configs=None):
+    def connect(self, channel_configs=None, channel_mapping=None):
         """
         连接设备并配置通道。
 
@@ -65,66 +65,33 @@ class CANDevice:
                     [{"type": "canfd", "arb_kbps": 500, "data_kbps": 2000}, ...],
                     [{"type": "can", "kbps": 500}, ...],
                 ]
+            channel_mapping: [(channel bus, box index, box channel index), ...]，
+                             全部来自 OTA.xlsx general 表。
         """
         self._channel_configs = channel_configs if channel_configs else []
 
-        # 设置通道映射
-        # for i in range(len(channel_configs[0]) if channel_configs else 1):
-        #     if i < 2:  # 最多配置2个通道
-        #         ret = tsapp_set_mapping_verbose(
-        #             b"TSMaster", 0, i,
-        #             "TC1016".encode("UTF8"), 3, 11, i, i, True
-        #         )
-        #         if ret == 0:
-        #             print(f"channel {i} mapping successfully")
-        #         else:
-        #             print(f"channel {i} mapping failed, error code: {ret}")
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 0, "TC1016".encode("UTF8"), 3, 11, 0, 0, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 1, "TC1016".encode("UTF8"), 3, 11, 0, 1, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 2, "TC1016".encode("UTF8"), 3, 11, 0, 2, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 3, "TC1016".encode("UTF8"), 3, 11, 0, 3, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 4, "TC1016".encode("UTF8"), 3, 11, 1, 0, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 5, "TC1016".encode("UTF8"), 3, 11, 1, 1, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 6, "TC1016".encode("UTF8"), 3, 11, 1, 2, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 7, "TC1016".encode("UTF8"), 3, 11, 1, 3, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 8, "TC1016".encode("UTF8"), 3, 11, 2, 0, True)
-        ret = tsapp_set_mapping_verbose(b"TSMaster", 0, 9, "TC1016".encode("UTF8"), 3, 11, 2, 2, True)
-        if ret == 0:
-            print(f"channel {i} mapping successfully")
-        else:
-            print(f"channel {i} mapping failed, error code: {ret}")
+        channel_mapping = channel_mapping or []
+
+        # 通道数量与映射全部由 OTA.xlsx general 表驱动：
+        # 应用通道号 = channel bus，box index / box channel index 取自表中对应列
+        ret = tsapp_set_can_channel_count(len(channel_mapping))
+        if ret != 0:
+            print(f"channel count set failed, error code: {ret}")
+
+        for ch, box_idx, box_ch in channel_mapping:
+            ret = tsapp_set_mapping_verbose(
+                b"TSMaster", 0, int(ch), "TC1016".encode("UTF8"), 3, 11, int(box_idx), int(box_ch), True
+            )
+            if ret == 0:
+                print(f"channel {ch} mapping successfully (box {box_idx}, box ch {box_ch})")
+            else:
+                print(f"channel {ch} mapping failed, error code: {ret}")
 
         # 配置波特率
-        # if channel_configs and len(channel_configs) > 0:
-        #     for ch_idx, cfg in enumerate(channel_configs[0]):
-        #         if cfg.get("type") == "canfd":
-        #             ret = tsapp_configure_baudrate_canfd(
-        #                 0,  # handle
-        #                 float(cfg.get("arb_kbps", 500)),
-        #                 float(cfg.get("data_kbps", 2000)),
-        #                 1, 0, True
-        #             )
-        #             print(f"CANFD channel {ch_idx} baudrate set successfully")
-        #         elif cfg.get("type") == "can":
-        #             ret = tsapp_configure_baudrate_can(
-        #                 ch_idx,
-        #                 float(cfg.get("kbps", 500)),
-        #                 0, True
-        #             )
-        #             print(f"CAN channel {ch_idx} baudrate set successfully")
-
-
-        # ret = tsapp_configure_baudrate_can(1, 500.0, 0, True)
-        ret = tsapp_configure_baudrate_canfd(0, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(1, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(2, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(3, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(4, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(5, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(6, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(7, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(8, 500.0, 2000.0, 1, 0, True)
-        ret = tsapp_configure_baudrate_canfd(9, 500.0, 2000.0, 1, 0, True)
+        for ch, _, _ in channel_mapping:
+            ret = tsapp_configure_baudrate_canfd(int(ch), 500.0, 2000.0, 1, 0, True)
+            if ret != 0:
+                print(f"channel {ch} baudrate set failed, error code: {ret}")
         # 连接
         ret = tsapp_connect()
         if ret == 0:

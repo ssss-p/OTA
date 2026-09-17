@@ -15,9 +15,11 @@ from utils.can_id_checker import (
     build_ecu_info_map,
     build_can_id_period_map,
     check_upgrade_scenario,
-    check_high_voltage_signal,
+    check_signal_value,
+    check_all_signal_values,
     monitor_liquid_cooling_signal,
     UpgradeWindowChecker,
+    SignalValueMonitor,
 )
 from utils.uds_upgrade_checker import UDSUpgradeMonitor, wait_for_upgrade_completion
 
@@ -37,13 +39,35 @@ class TestDemo1:
         self.json_data = load_json_files("ota_json")
         log_info(f"已读取 {len(self.json_data)} 个 JSON 文件")
 
-        # 初始化 CAN 设备
+        # 初始化 CAN 设备（通道映射全部来自 OTA.xlsx general 表）
+        channel_map = {}
+        for row in self.ota_data.get("general", []):
+            ch = row.get("channel bus")
+            if ch is None:
+                continue
+            ch = int(ch)
+            if ch not in channel_map:
+                box = row.get("box index")
+                box_ch = row.get("box channel index")
+                print(f"{box = },{box_ch = }")
+                if box is None or box_ch is None:
+                    raise ValueError(
+                        f"OTA.xlsx general 表 channel bus {ch} 缺少 box index / box channel index"
+                    )
+                channel_map[ch] = (int(box), int(box_ch))
+        channel_mapping = [
+            (ch, box, box_ch) for ch, (box, box_ch) in sorted(channel_map.items())
+        ]
+        log_info(f"OTA.xlsx 通道映射 (channel bus, box index, box channel index): {channel_mapping}")
         self.can = CANDevice()
         self.can.initialize(True, True, True)
-        self.can.connect([
-            [{"type": "canfd", "arb_kbps": 500, "data_kbps": 2000}] * 4,
-            # [{"type": "canfd", "arb_kbps": 500, "data_kbps": 2000}] * 4,
-        ])
+        self.can.connect(
+            [
+                [{"type": "canfd", "arb_kbps": 500, "data_kbps": 2000}] * 4,
+                # [{"type": "canfd", "arb_kbps": 500, "data_kbps": 2000}] * 4,
+            ],
+            channel_mapping=channel_mapping,
+        )
         log_info(f"已连接 {len(self.can.devices)} 台 CAN 设备")
 
         # 记录 SN 与 device_index 的对应关系
@@ -71,38 +95,6 @@ class TestDemo1:
                     log_info(f"停止 BLF 记录失败: {e}")
             self.can.finalize()
             log_info("已断开 CAN 设备连接")
-
-    def _wait_high_voltage(self, hv_canid=0x343, timeout_s=300):
-        """等待高压信号，超时返回 False。"""
-        start_time = time.time()
-        with log_step("Step1", "监控高压信号，准备升级"):
-            while time.time() - start_time < timeout_s:
-                status, result = check_high_voltage_signal(
-                    lambda: self.can.get_received_messages(clear=True),
-                    hv_canid=hv_canid,
-                )
-                log_info(f"高压信号检测结果: {status}, {result}")
-                if status:
-                    return True
-                time.sleep(0.5)
-        log_error(f"{timeout_s}s 内未收到高压信号 0x{hv_canid:03X}")
-        return False
-
-    def _wait_low_voltage(self, lv_canid=0x343, timeout_s=300):
-        """等待低压信号，超时返回 False。"""
-        start_time = time.time()
-        with log_step("Step3", "监控低压信号，准备低压升级"):
-            while time.time() - start_time < timeout_s:
-                status, result = check_high_voltage_signal(
-                    lambda: self.can.get_received_messages(clear=True),
-                    hv_canid=lv_canid,
-                )
-                log_info(f"低压信号检测结果: {status}, {result}")
-                if status:
-                    return True
-                time.sleep(0.5)
-        log_error(f"{timeout_s}s 内未收到低压信号 0x{lv_canid:03X}")
-        return False
 
     def _extract_uds_payload(self, data):
         """
@@ -323,12 +315,23 @@ class TestDemo1:
         loop_count = 0
         # 液冷报文 0x111 全程时间戳（收尾做周期检查）
         lc_times = []
+
+        # 0x343 报文信号值全程监控（流式，内存 O(1)）：升级全程每轮喂入新报文即时校验
+        signal_cfg = [s for s in self.json_data.get("signal", []) if int(s["Msg ID"], 0) == 0x343]
+        signal_monitor = SignalValueMonitor(signal_cfg) if signal_cfg else None
+        if signal_monitor:
+            log_info(f"[{stage_name}] 启用 0x343 信号值全程监控，期望值={signal_cfg[0]['value']}")
+
         with log_step("Step2", stage_name):
             while time.time() - start_time < timeout_s and not all_done:
                 loop_count += 1
                 # 获取报文（已按时间排序）
                 all_msgs = self.can.get_received_messages(clear=True)
                 log_info(f"[{stage_name}] 第 {loop_count} 轮循环，收到 {len(all_msgs)} 帧报文")
+
+                # 0x343 信号值全程即时校验（只保留统计与证据，不缓存报文）
+                if signal_monitor and all_msgs:
+                    signal_monitor.process(all_msgs)
 
                 # # 液冷报文 0x111 全程时间戳累积
                 # for m in all_msgs:
@@ -507,24 +510,18 @@ class TestDemo1:
             #         log_error_continue(f"液冷报文(0x111)全程周期检查 FAIL: {r}")
 
         if not all_done:
-            log_error(f"{stage_name} 超时，未完成所有 ECU 升级")
+            log_error_continue(f"{stage_name} 超时，未完成所有 ECU 升级")
+
+        # 0x343 信号值全程校验结论（升级结束后汇总判定）
+        if signal_monitor:
+            all_ok, summary, results = signal_monitor.result()
+            if all_ok:
+                log_info(f"[{stage_name}] 0x343 信号值全程校验 PASS: {summary}")
+            else:
+                log_error(f"[{stage_name}] 0x343 信号值全程校验 FAIL: {summary}")
 
         return all_done
 
-    def _check_liquid_cooling_period(self, times, canid=0x111, period_ms=100, tol=0.10):
-        """全程检查液冷报文周期：相邻帧间隔是否都在 period_ms±tol 内。返回 (passed, reasons)。"""
-        if len(times) < 2:
-            return True, []  # 样本不足，不判定
-        lower = period_ms * (1 - tol)
-        upper = period_ms * (1 + tol)
-        for i in range(1, len(times)):
-            d = (times[i] - times[i - 1]) * 1000.0
-            if d < lower or d > upper:
-                return False, [
-                    f"液冷报文 CANID=0x{canid:03X} 周期异常, 期望={period_ms}ms(±{tol:.0%}), "
-                    f"两帧间隔={d:.1f}ms, 时间戳=[{times[i - 1]:.6f}, {times[i]:.6f}]"
-                ]
-        return True, []
 
     @allure.title("test_001")
     @allure.description("OTA 升级监控：高压升级 -> 低压升级 -> 全部完成")
@@ -559,11 +556,23 @@ class TestDemo1:
         self.can_id_period_map = build_can_id_period_map(general_list)
         log_info(f"CANID 周期映射数量: {len(self.can_id_period_map)}")
 
+        # time.sleep(1)
+        # # 批量检查所有指定 CANID 的信号值是否都等于期望值
+        # all_msgs = self.can.get_received_messages(clear=True)
+        # log_info(f"后台线程累计接收到 {len(all_msgs)} 帧报文")
+        # signals = [
+        #     {"Msg ID": "0x343", "Startbit": 46, "len": 2, "value": 1},
+        # ]
+        # all_ok, summary, results = check_all_signal_values(all_msgs, signals)
+        # if all_ok:
+        #     log_info(f"信号检查结果: {summary}")
+        # else:
+        #     log_error(f"信号检查结果: {summary}")
         # Step2: 监控完整的 UDS 30 步升级流程
         if not self._monitor_upgrade_stage(
             ecu_info_map,
             stage_name="UDS 30步升级流程监控",
-            timeout_s=40*60,
+            timeout_s=40 * 60,
             can_id_whitelist=self.can_id_whitelist,
             period_map=self.can_id_period_map,
         ):

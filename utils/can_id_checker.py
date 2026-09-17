@@ -422,7 +422,246 @@ def check_can_id_neighbor_period(messages, canid, period_ms, target_time, tolera
     return False, actual_diff_ms
 
 
-def check_high_voltage_signal(msg_getter, high_voltage_canid=0x343, timeout_minutes=1):
+def extract_signal_value(data, startbit, length, byte_order="intel"):
+    """
+    从 CAN 报文数据中提取信号原始值。
+
+    bit 序号约定（DBC/Vector）：bit n = 第 n//8 字节的 bit(n%8)，
+    字节内 bit0=LSB、bit7=MSB。例如 startbit=46 -> data[5] 的 bit6。
+
+    Args:
+        data: 报文数据（int 列表或 bytes）
+        startbit: 起始 bit 位
+        length: 信号长度（bit）
+        byte_order: "motorola"（大端，startbit 为信号 MSB，低位向字节内 LSB 方向延伸）
+                    或 "intel"（小端，startbit 为信号 LSB，向字节内 MSB 方向延伸）
+
+    Returns:
+        int，信号原始值
+    """
+    payload = bytes(data)
+    nbytes = len(payload)
+    nbits = nbytes * 8
+    if startbit < 0 or length <= 0 or startbit >= nbits:
+        raise ValueError(
+            f"信号范围越界: startbit={startbit}, len={length}, 数据仅 {nbytes} 字节({nbits}bit)"
+        )
+    if byte_order == "intel":
+        if startbit + length > nbits:
+            raise ValueError(
+                f"信号范围越界: startbit={startbit}, len={length}, 数据仅 {nbytes} 字节({nbits}bit)"
+            )
+        raw = int.from_bytes(payload, "little")
+        return (raw >> startbit) & ((1 << length) - 1)
+    # motorola: startbit 为 MSB，可用 bit 数 = 本字节 MSB 及以下 (p+1) 位 + 后续整字节
+    b, p = startbit // 8, startbit % 8
+    if length > (p + 1) + (nbytes - b - 1) * 8:
+        raise ValueError(
+            f"信号范围越界: startbit={startbit}, len={length}, 数据仅 {nbytes} 字节({nbits}bit)"
+        )
+    seq_start = b * 8 + (7 - p)  # 换算为"大端顺序序号"（bit0=首字节MSB）
+    raw = int.from_bytes(payload, "big")
+    return (raw >> (nbits - seq_start - length)) & ((1 << length) - 1)
+
+
+def check_signal_value(messages, signal, byte_order="intel"):
+    """
+    检查报文中指定信号的值是否等于期望值（逐帧检查，任一帧不符即 FAIL）。
+
+    Args:
+        messages: 报文列表，每个报文字典需包含 "id"/"data"/"time"/"channel" 键
+        signal: 信号描述字典，例如
+                {"Msg ID": "0x343", "Startbit": 46, "len": 2, "value": 1}
+                Msg ID 支持 "0x" 前缀字符串或 int；value 为期望信号值
+        byte_order: 信号字节序，默认 "intel"（小端）
+
+    Returns:
+        (is_ok, message, actual_value, evidence_msg)
+        is_ok: bool，True 表示该 CANID 所有帧信号值都 == 期望值
+        message: str，说明信息（FAIL 含首次不符帧的实际值/期望值/时间/通道/Data 证据）
+        actual_value: int or None，实际提取的信号值（FAIL 时为首次不符帧的值，未收到报文时为 None）
+        evidence_msg: dict or None，用于判断的报文（FAIL 时为首次不符帧）
+    """
+    from common.logger import log_info
+
+    msg_id = signal["Msg ID"]
+    can_id = int(msg_id, 0) if isinstance(msg_id, str) else int(msg_id)
+    startbit = int(signal["Startbit"])
+    length = int(signal["len"])
+    expected = int(signal["value"])
+
+    frames = [m for m in messages if m.get("id") == can_id]
+    if not frames:
+        log_info(f"未收到 CANID=0x{can_id:03X} 的报文")
+        return False, f"未收到 CANID=0x{can_id:03X} 的报文", None, None
+
+    frames.sort(key=lambda m: m.get("time") or 0)
+    mismatches = []
+    for m in frames:
+        v = extract_signal_value(m["data"], startbit, length, byte_order)
+        if v != expected:
+            mismatches.append((m, v))
+
+    if mismatches:
+        first_m, first_v = mismatches[0]
+        data_hex = " ".join(f"{b:02X}" for b in first_m["data"])
+        evidence = (
+            f"CANID=0x{can_id:03X} Startbit={startbit} len={length} "
+            f"实际值={first_v} 期望值={expected} Data=[{data_hex}] "
+            f"首次不符 Time={first_m.get('time')}s Channel={first_m.get('channel')} "
+            f"(不符帧数={len(mismatches)}/{len(frames)})"
+        )
+        log_info(f"信号检查 FAIL: {evidence}")
+        return False, f"信号不符: {evidence}", first_v, first_m
+
+    latest = frames[-1]
+    actual = extract_signal_value(latest["data"], startbit, length, byte_order)
+    data_hex = " ".join(f"{b:02X}" for b in latest["data"])
+    evidence = (
+        f"CANID=0x{can_id:03X} Startbit={startbit} len={length} "
+        f"实际值={actual} 期望值={expected} Data=[{data_hex}] "
+        f"Time={latest.get('time')}s Channel={latest.get('channel')} "
+        f"(全部{len(frames)}帧符合)"
+    )
+    log_info(f"信号检查 PASS: {evidence}")
+    return True, f"信号正确: {evidence}", actual, latest
+
+
+class SignalValueMonitor:
+    """
+    流式信号期望值监控：逐轮 process(messages) 即时判定，只保留统计与证据，
+    不缓存报文（内存 O(1)），适合升级全程等长时间监控。
+
+    用法:
+        monitor = SignalValueMonitor(signals)
+        for msgs in 每轮报文:
+            monitor.process(msgs)
+        all_ok, summary, results = monitor.result()
+
+    判定语义与 check_signal_value 一致：任一帧值 != 期望即不符，
+    证据含首次不符帧时间戳 + Data 字节 + 不符帧数。
+    """
+
+    def __init__(self, signals, byte_order="intel"):
+        self._byte_order = byte_order
+        self._items = []
+        for sig in signals:
+            msg_id = sig["Msg ID"]
+            can_id = int(msg_id, 0) if isinstance(msg_id, str) else int(msg_id)
+            self._items.append({
+                "signal": sig,
+                "can_id": can_id,
+                "startbit": int(sig["Startbit"]),
+                "length": int(sig["len"]),
+                "expected": int(sig["value"]),
+                "total": 0,
+                "mismatch": 0,
+                "first_bad": None,   # (frame, value) 首次不符帧证据
+                "last_frame": None,  # (frame, value) 最新帧证据
+            })
+        self._ids = {it["can_id"] for it in self._items}
+
+    @property
+    def can_ids(self):
+        """监控的 CANID 集合"""
+        return set(self._ids)
+
+    def process(self, messages):
+        """处理一轮报文（按时间顺序），即时更新统计，不缓存报文"""
+        for m in messages:
+            mid = m.get("id")
+            if mid not in self._ids:
+                continue
+            for it in self._items:
+                if it["can_id"] != mid:
+                    continue
+                v = extract_signal_value(
+                    m["data"], it["startbit"], it["length"], self._byte_order
+                )
+                it["total"] += 1
+                it["last_frame"] = (m, v)
+                if v != it["expected"]:
+                    it["mismatch"] += 1
+                    if it["first_bad"] is None:
+                        it["first_bad"] = (m, v)
+
+    def result(self):
+        """
+        汇总判定结果。
+
+        Returns:
+            (all_ok, summary, results)，含义同 check_all_signal_values
+        """
+        from common.logger import log_info
+
+        results = []
+        failed = []
+        for it in self._items:
+            if it["total"] == 0:
+                ok = False
+                msg = f"未收到 CANID=0x{it['can_id']:03X} 的报文"
+                actual, evidence = None, None
+            elif it["mismatch"] > 0:
+                m, v = it["first_bad"]
+                data_hex = " ".join(f"{b:02X}" for b in m["data"])
+                ev_str = (
+                    f"CANID=0x{it['can_id']:03X} Startbit={it['startbit']} len={it['length']} "
+                    f"实际值={v} 期望值={it['expected']} Data=[{data_hex}] "
+                    f"首次不符 Time={m.get('time')}s Channel={m.get('channel')} "
+                    f"(不符帧数={it['mismatch']}/{it['total']})"
+                )
+                ok, actual, evidence = False, v, m
+                msg = f"信号不符: {ev_str}"
+            else:
+                m, v = it["last_frame"]
+                data_hex = " ".join(f"{b:02X}" for b in m["data"])
+                ev_str = (
+                    f"CANID=0x{it['can_id']:03X} Startbit={it['startbit']} len={it['length']} "
+                    f"实际值={v} 期望值={it['expected']} Data=[{data_hex}] "
+                    f"Time={m.get('time')}s Channel={m.get('channel')} "
+                    f"(全部{it['total']}帧符合)"
+                )
+                ok, actual, evidence = True, v, m
+                msg = f"信号正确: {ev_str}"
+            log_info(f"信号检查 {'PASS' if ok else 'FAIL'}: {msg}")
+            results.append((it["signal"], ok, msg, actual, evidence))
+            if not ok:
+                failed.append(msg)
+
+        all_ok = not failed
+        summary = (
+            f"共 {len(self._items)} 个信号: {len(self._items) - len(failed)} 个符合, "
+            f"{len(failed)} 个不符"
+        )
+        if failed:
+            summary += " | " + " | ".join(failed)
+        log_info(f"批量信号检查{'全部通过' if all_ok else '存在不符'}: {summary}")
+        return all_ok, summary, results
+
+
+def check_all_signal_values(messages, signals, byte_order="intel"):
+    """
+    批量检查所有指定 CANID 的信号值是否都等于期望值（一次性判定）。
+    长时间监控请用 SignalValueMonitor 流式处理，避免缓存全量报文。
+
+    Args:
+        messages: 报文列表，每个报文字典需包含 "id"/"data"/"time"/"channel" 键
+        signals: 信号描述字典列表，每个元素同 check_signal_value 的 signal，例如
+                [{"Msg ID": "0x343", "Startbit": 46, "len": 2, "value": 1}, ...]
+        byte_order: 信号字节序，默认 "intel"（小端）
+
+    Returns:
+        (all_ok, summary, results)
+        all_ok: bool，所有信号都符合期望才为 True
+        summary: str，汇总说明（含不符项明细）
+        results: [(signal, is_ok, message, actual_value, evidence_msg), ...]
+    """
+    monitor = SignalValueMonitor(signals, byte_order)
+    monitor.process(messages)
+    return monitor.result()
+
+
+def check_signal(msg_getter, high_voltage_canid=0x343, timeout_minutes=1):
     """
     检查是否收到高压报文（带超时检测）。
 

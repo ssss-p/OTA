@@ -1,7 +1,8 @@
 [
   {
     "BUS NAME": "Connected CANFD",
-    "number": null,
+    "box index": 0,
+    "box channel index": 3,
     "channel bus": 3,
     "ECUname": "RHMWC",
     "ECUindex": 1,
@@ -13,7 +14,8 @@
   },
   {
     "BUS NAME": "Connected CANFD",
-    "number": null,
+    "box index": 0,
+    "box channel index": 3,
     "channel bus": 3,
     "ECUname": "LHMWC",
     "ECUindex": 2,
@@ -25,7 +27,8 @@
   },
   {
     "BUS NAME": "Connected CANFD",
-    "number": null,
+    "box index": 2,
+    "box channel index": 3,
     "channel bus": 3,
     "ECUname": "NFCAM",
     "ECUindex": 3,
@@ -37,7 +40,8 @@
   },
   {
     "BUS NAME": "Infotainment CANFD",
-    "number": null,
+    "box index": 0,
+    "box channel index": 2,
     "channel bus": 2,
     "ECUname": null,
     "ECUindex": null,
@@ -49,7 +53,8 @@
   },
   {
     "BUS NAME": "Body Extend CAN",
-    "number": null,
+    "box index": 2,
+    "box channel index": 0,
     "channel bus": 8,
     "ECUname": "EWS",
     "ECUindex": 1,
@@ -61,7 +66,8 @@
   },
   {
     "BUS NAME": "Body CANFD",
-    "number": null,
+    "box index": 0,
+    "box channel index": 0,
     "channel bus": 0,
     "ECUname": "LVBM",
     "ECUindex": 1,
@@ -73,7 +79,8 @@
   },
   {
     "BUS NAME": "Safety CANFD",
-    "number": null,
+    "box index": 0,
+    "box channel index": 1,
     "channel bus": 1,
     "ECUname": "SCM",
     "ECUindex": 1,
@@ -85,7 +92,8 @@
   },
   {
     "BUS NAME": "Comfort CANFD",
-    "number": null,
+    "box index": 2,
+    "box channel index": 2,
     "channel bus": 9,
     "ECUname": "MDCM",
     "ECUindex": 1,
@@ -97,7 +105,8 @@
   },
   {
     "BUS NAME": "Comfort CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 0,
     "channel bus": 4,
     "ECUname": "FDM",
     "ECUindex": 1,
@@ -109,7 +118,8 @@
   },
   {
     "BUS NAME": "Comfort CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 0,
     "channel bus": 4,
     "ECUname": "SCU",
     "ECUindex": 2,
@@ -121,7 +131,8 @@
   },
   {
     "BUS NAME": "Comfort CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 0,
     "channel bus": 4,
     "ECUname": "FLSM",
     "ECUindex": 3,
@@ -133,7 +144,8 @@
   },
   {
     "BUS NAME": "Comfort CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 0,
     "channel bus": 4,
     "ECUname": "CF",
     "ECUindex": 4,
@@ -145,7 +157,8 @@
   },
   {
     "BUS NAME": "Comfort CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 0,
     "channel bus": 4,
     "ECUname": "TPMS",
     "ECUindex": 5,
@@ -157,7 +170,8 @@
   },
   {
     "BUS NAME": "Comfort CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 0,
     "channel bus": 4,
     "ECUname": "SWS",
     "ECUindex": 6,
@@ -169,7 +183,8 @@
   },
   {
     "BUS NAME": "Chassis CANFD",
-    "number": null,
+    "box index": 1,
+    "box channel index": 1,
     "channel bus": 5,
     "ECUname": "SDM",
     "ECUindex": 1,
@@ -181,7 +196,8 @@
   },
   {
     "BUS NAME": "Chassis CANFD",
-    "number": null,
+    "box index": 1,
+    "box channel index": 1,
     "channel bus": 5,
     "ECUname": "EPS",
     "ECUindex": 2,
@@ -193,7 +209,8 @@
   },
   {
     "BUS NAME": "Chassis CANFD",
-    "number": null,
+    "box index": 1,
+    "box channel index": 1,
     "channel bus": 5,
     "ECUname": "IBS",
     "ECUindex": 3,
@@ -205,7 +222,8 @@
   },
   {
     "BUS NAME": "Chassis CANFD",
-    "number": null,
+    "box index": 1,
+    "box channel index": 1,
     "channel bus": 5,
     "ECUname": "CPM",
     "ECUindex": 4,
@@ -217,7 +235,8 @@
   },
   {
     "BUS NAME": "PowerTrain CANFD",
-    "number": null,
+    "box index": 1,
+    "box channel index": 3,
     "channel bus": 7,
     "ECUname": "TC",
     "ECUindex": 1,
@@ -229,7 +248,8 @@
   },
   {
     "BUS NAME": "PowerTrain CANFD",
-    "number": null,
+    "box index": 1,
+    "box channel index": 3,
     "channel bus": 7,
     "ECUname": "SAC",
     "ECUindex": 2,
@@ -241,7 +261,8 @@
   },
   {
     "BUS NAME": "PowerTrain CANFD",
-    "number": null,
+    "box index": 1,
+    "box channel index": 3,
     "channel bus": 7,
     "ECUname": "HVAC",
     "ECUindex": 3,
@@ -253,7 +274,8 @@
   },
   {
     "BUS NAME": "Comfort Extended CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 2,
     "channel bus": 6,
     "ECUname": "ASCU",
     "ECUindex": 1,
@@ -265,7 +287,8 @@
   },
   {
     "BUS NAME": "Comfort Extended CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 2,
     "channel bus": 6,
     "ECUname": "IDAM",
     "ECUindex": 2,
@@ -277,7 +300,8 @@
   },
   {
     "BUS NAME": "Comfort Extended CAN",
-    "number": null,
+    "box index": 1,
+    "box channel index": 2,
     "channel bus": 6,
     "ECUname": "PLCM",
     "ECUindex": 3,
@@ -289,7 +313,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -301,7 +326,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -313,7 +339,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -325,7 +352,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -337,7 +365,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -349,7 +378,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -361,7 +391,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -373,7 +404,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -385,7 +417,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -397,7 +430,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -409,7 +443,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -421,7 +456,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -433,7 +469,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -445,7 +482,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -457,7 +495,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -469,7 +508,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -481,7 +521,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -493,7 +534,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -505,7 +547,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -517,7 +560,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -529,7 +573,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -541,7 +586,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -553,7 +599,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -565,7 +612,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -577,7 +625,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -589,7 +638,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -601,7 +651,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -613,7 +664,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -625,7 +677,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -637,7 +690,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -649,7 +703,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -661,7 +716,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -673,7 +729,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -685,7 +742,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
@@ -697,7 +755,8 @@
   },
   {
     "BUS NAME": null,
-    "number": null,
+    "box index": null,
+    "box channel index": null,
     "channel bus": null,
     "ECUname": null,
     "ECUindex": null,
