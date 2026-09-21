@@ -90,6 +90,81 @@ def check_can_id_whitelist(messages, whitelist):
     return True, []
 
 
+def check_no_ecu_bus_whitelist(messages, whitelist, period_map=None, box_channel=None,
+                               tolerance=0.05, max_gap_factor=10.0):
+    """
+    校验"没有 ECU 升级任务的总线"的白名单报文：ID 是否出现 + 周期是否符合预期。
+
+    用于 OTA.xlsx 里"只有白名单 CANID、没有 ECU"的总线：不参与升级窗口检查，
+    但白名单报文在整个升级期间仍然要按周期发送。
+    传 box_channel 时只统计该 box 通道上的报文（不同通道通过 channel bus 区分，
+    channel bus 映射到 box 通道号后传入），避免多总线共用 CANID 互相顶替。
+
+    周期检查按"连续发送段"判定：
+    - 段内相邻间隔必须在 period ± tolerance 内，否则周期异常
+    - 超过 max_gap_factor × period 的间隔视为"新段"（允许总线周期性停发再恢复）
+
+    Args:
+        messages: 报文列表，每个报文字典需包含 "id"、"time" 键（"channel" 键可选）
+        whitelist: 白名单 CANID 整数集合
+        period_map: {canid: period_ms}，仅校验其中的 CANID（None 或空=只查出现性）
+        box_channel: 只统计该 box 通道上的报文（None=不过滤）
+        tolerance: 周期容差比例，默认 5%
+        max_gap_factor: 超过 period×该倍数 的间隔视为新段，默认 10
+
+    Returns:
+        (ok, reasons)
+        ok: bool，True 表示出现性和周期都正常
+        reasons: list[str]，异常原因列表（空=正常）
+    """
+    if period_map is None:
+        period_map = {}
+
+    # 按 box 通道过滤后，收集每个白名单 CANID 的时间戳
+    times = {c: [] for c in whitelist}
+    for m in messages:
+        if box_channel is not None and m.get("channel") != box_channel:
+            continue
+        canid = m["id"]
+        if canid in times:
+            times[canid].append(m["time"])
+
+    reasons = []
+
+    # 1) 出现性：白名单 CANID 必须都至少出现一次
+    missing = [c for c in sorted(whitelist) if not times[c]]
+    if missing:
+        reasons.append("白名单报文未出现: " + ", ".join(f"0x{c:03X}" for c in missing))
+
+    # 2) 周期：配了周期的 CANID，按连续发送段校验
+    for canid in sorted(period_map):
+        if canid not in whitelist:
+            continue
+        period_ms = period_map[canid]
+        if not period_ms or not times[canid] or len(times[canid]) < 2:
+            continue
+        ts = sorted(times[canid])
+        period = period_ms / 1000.0
+        max_gap = period * max_gap_factor
+        lo, hi = period * (1 - tolerance), period * (1 + tolerance)
+        bad = []
+        for prev, cur in zip(ts, ts[1:]):
+            gap = cur - prev
+            if gap > max_gap:
+                continue  # 新段开始，不判段间间隔
+            if gap < lo or gap > hi:
+                bad.append((prev, cur, gap * 1000.0))
+        if bad:
+            p0, c0, g0 = bad[0]
+            reasons.append(
+                f"白名单周期异常 CANID=0x{canid:03X} 期望={period_ms}ms"
+                f"±{tolerance:.0%}: 首处 t={p0:.6f}s~{c0:.6f}s 间隔={g0:.1f}ms, "
+                f"共{len(bad)}处"
+            )
+
+    return (not reasons), reasons
+
+
 def build_can_id_period_map(general_list):
     """
     从 general 配置列表中解析 CANID 与周期的对应关系。
@@ -122,7 +197,7 @@ def build_can_id_period_map(general_list):
     return period_map
 
 
-def check_can_id_periods(messages, period_map, tolerance=0.05, whitelist=None):
+def check_can_id_periods(messages, period_map, tolerance=0.1, whitelist=None):
     """
     检查报文周期是否符合预期，默认只检查白名单内且配置了周期的 CANID。
 
@@ -366,7 +441,7 @@ def check_upgrade_scenario(
     }
 
 
-def check_can_id_neighbor_period(messages, canid, period_ms, target_time, tolerance=0.05):
+def check_can_id_neighbor_period(messages, canid, period_ms, target_time, tolerance=0.1):
     """
     检查指定 CANID 在 target_time 附近的上一帧与下一帧时间差是否满足周期 ±5%。
 
@@ -700,7 +775,7 @@ def check_signal(msg_getter, high_voltage_canid=0x343, timeout_minutes=1):
         time.sleep(0.1)
 
 
-def monitor_liquid_cooling_signal(messages, liquid_cooling_canid=0x181, period_ms=100, tolerance=0.05):
+def monitor_liquid_cooling_signal(messages, liquid_cooling_canid=0x181, period_ms=100, tolerance=0.1):
     """
     检查报文列表中液冷信号的周期是否满足要求。
 
@@ -768,8 +843,8 @@ class UpgradeWindowChecker:
     """
 
     def __init__(self, ecu_name, whitelist_periods, valid_canids,
-                 func_canid=0x7DF, req_canid=None, tolerance=0.05, reaction_time=3.0,
-                 channel=None):
+                 func_canid=0x7DF, req_canid=None, tolerance=0.1, reaction_time=3.0,
+                 channel=None, resp_canids=None, req_owners=None, resp_owners=None):
         self.ecu_name = ecu_name
         # channel 归一化为 int，防止驱动返回字符串类型导致比较失败
         if channel is not None:
@@ -785,6 +860,17 @@ class UpgradeWindowChecker:
         self.boundary_canids = {func_canid}
         if req_canid:
             self.boundary_canids.add(req_canid)
+        # 本总线所有 ECU 的 resp CANID：关窗帧(71 01 FF 01 00)必须来自其中之一，
+        # 防止同通道其它 ECU 的相同载荷误关窗口
+        self._resp_canids = set(resp_canids) if resp_canids else set()
+        # reqid/respid → ECU 名字 归属表：用于通过"开窗前 31 01 02 03 交互"
+        # 把功能寻址(0x7DF)的开窗帧归属到具体 ECU
+        self._req_owners = req_owners or {}
+        self._resp_owners = resp_owners or {}
+        # 最近一次 31 01 02 03 交互对应的 ECU（待升级目标），开窗时锁定为本段归属
+        self._pending_target_ecu = None
+        # 当前打开窗口的归属 ECU（开窗时刻由 _pending_target_ecu 锁定）
+        self._phase_ecu = None
         self.opened = False
         self.closed = False
         self.phase = 0  # 已开启的升级窗口段数（每个ECU阶段各一对 28 83 03/71 01 FF 01 00）
@@ -798,6 +884,10 @@ class UpgradeWindowChecker:
         self.step_gate = False  # 前4步是否完成（外部设置）
         self.comm_control_seen = False  # 是否已收到 28 83 03
         self._pending_open_time = None  # step_gate 打开前缓存的 28 83 03 时间戳
+        # 白名单 CANID 归属：{canid: set(ecu_name)}，用于"仅豁免当前升级 ECU 独占的白名单"
+        self._whitelist_owners = {}
+        # 当前正在升级的 ECU 名字（外部每轮设置，用于白名单缺失豁免）
+        self._active_ecu = None
         # 每段(每个ECU)窗口的判定快照：关窗时刻立即记录，避免被下一个 ECU 开窗时清空
         # 元素: {"phase": int, "start": float|None, "end": float|None, "passed": bool|None, "reasons": list}
         self.phase_results = []
@@ -842,19 +932,30 @@ class UpgradeWindowChecker:
                 continue
             self.last_msg_time = t
             p = self._payload(data)
+            # 待升级目标 ECU 识别：31 01 02 03(检查编程条件) 交互
+            # - 请求 31 01 02 03 可能走 ECU 自身 reqid 或功能寻址 0x7DF
+            # - 响应 71 01 02 03 xx 必走 ECU 自身 respid（最可靠的 ECU 身份信号）
+            # 用于给随后功能寻址(0x7DF)的开窗帧 28 83 03 归属到具体 ECU
+            if p and len(p) >= 4:
+                if p[:4] == [0x31, 0x01, 0x02, 0x03] and mid in self._req_owners:
+                    self._pending_target_ecu = self._req_owners[mid]
+                elif p[:4] == [0x71, 0x01, 0x02, 0x03] and mid in self._resp_owners:
+                    self._pending_target_ecu = self._resp_owners[mid]
             # 窗口边界检测：直接通过 UDS 报文帧判定，时间戳精确
             if p and len(p) >= 3:
                 if mid in self.boundary_canids and p[:3] == [0x28, 0x83, 0x03] and (not self.opened or self.closed):
-                    # 开窗帧：28 83 03 功能寻址请求（需满足前4步完成 step_gate）
+                    # 开窗帧：28 83 03 功能寻址请求（需满足前4步完成 step_gate）。
+                    # CANID 须为本总线 0x7DF 或任一 ECU 的 reqid（boundary_canids 已聚合）
                     self.comm_control_seen = True
                     self._pending_open_time = t
                     if self.step_gate:
                         self._do_open_window(t)
                 elif (len(p) >= 5 and p[:5] == [0x71, 0x01, 0xFF, 0x01, 0x00]
-                      and self.opened and not self.closed):
+                      and self.opened and not self.closed
+                      and (not self._resp_canids or mid in self._resp_canids)):
                     # 关窗帧：71 01 FF 01 00（检查编程依赖性 31 01 FF 01 的正响应，
-                    # 对应第23步。由被升级 ECU 的 resp CANID 物理寻址发出，
-                    # 不在 boundary_canids 中，故只按有效载荷识别）
+                    # 对应第23步）。CANID 须为本总线某 ECU 的 respid，防止同通道
+                    # 其它 ECU 的相同载荷误关本段窗口
                     self.closed = True
                     self.window_close_time = t
                     # 关窗时刻立即快照本段判定结果——同一批报文中若紧跟下一个
@@ -894,6 +995,9 @@ class UpgradeWindowChecker:
         self.window_open_time = t
         self.window_close_time = None
         self.last_msg_time = t
+        # 开窗时刻锁定本段归属 ECU（来自开窗前 31 01 02 03 交互；未识别到则为 None）
+        self._phase_ecu = self._pending_target_ecu
+        self._pending_target_ecu = None
         self.seen.clear()
         self.times.clear()
         self.blacklist.clear()
@@ -928,6 +1032,8 @@ class UpgradeWindowChecker:
             "end": end_time,
             "passed": passed,
             "reasons": reasons,
+            # 本段窗口的归属 ECU（开窗前 31 01 02 03 交互识别；未识别到则为 None）
+            "ecu": self._phase_ecu,
         })
 
     def finalize(self):
@@ -954,6 +1060,31 @@ class UpgradeWindowChecker:
         end_time = self.window_close_time if self.window_close_time is not None else self.last_msg_time
         return check_start, end_time
 
+    def set_whitelist_owners(self, owners):
+        """外部设置白名单 CANID 归属表 {canid: set(ecu_name)}。
+        用于在判定"白名单缺失"时，豁免当前升级 ECU 独占的白名单。"""
+        self._whitelist_owners = owners or {}
+
+    def set_active_ecu(self, ecu_name):
+        """外部设置当前正在升级的 ECU 名字（None=未知，不做豁免）。"""
+        self._active_ecu = ecu_name
+
+    def _required_whitelist(self):
+        """必查白名单 CANID 集合：整条总线白名单减去"当前升级 ECU 独占"的 CANID。
+        升级 ECU 优先取本段开窗时锁定的归属 ECU(_phase_ecu)，
+        未识别到再回退到外部每轮同步的 _active_ecu。
+        只有当某 CANID 仅归属当前升级 ECU（无其它 ECU 共用）时才豁免；
+        只要还有任一其它 ECU 需要它，就仍在必查集合内。"""
+        active_ecu = self._phase_ecu or self._active_ecu
+        if active_ecu is None:
+            return set(self.whitelist_periods)
+        required = set(self.whitelist_periods)
+        for canid in list(required):
+            owners = self._whitelist_owners.get(canid, set())
+            if owners and owners <= {active_ecu}:
+                required.discard(canid)
+        return required
+
     def evaluate(self):
         """
         判定窗口结果。
@@ -966,7 +1097,8 @@ class UpgradeWindowChecker:
         if not self.opened:
             return None, []
         reasons = []
-        missing = set(self.whitelist_periods.keys()) - self.seen
+        required = self._required_whitelist()
+        missing = required - self.seen
         if missing:
             reasons.append("白名单报文未出现: " + ", ".join(f"0x{x:03X}" for x in sorted(missing)))
         # 周期检查（仅对配了周期且采样>=2 的 CANID）

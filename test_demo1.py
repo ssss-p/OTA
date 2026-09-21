@@ -17,6 +17,7 @@ from utils.can_id_checker import (
     check_upgrade_scenario,
     check_signal_value,
     check_all_signal_values,
+    check_no_ecu_bus_whitelist,
     monitor_liquid_cooling_signal,
     UpgradeWindowChecker,
     SignalValueMonitor,
@@ -59,6 +60,8 @@ class TestDemo1:
             (ch, box, box_ch) for ch, (box, box_ch) in sorted(channel_map.items())
         ]
         log_info(f"OTA.xlsx 通道映射 (channel bus, box index, box channel index): {channel_mapping}")
+        # 逻辑通道(channel bus) -> box 通道号：用于按总线隔离报文（收包 channel 字段为 box 通道号）
+        self.bus_channel_map = {ch: box_ch for ch, _, box_ch in channel_mapping}
         self.can = CANDevice()
         self.can.initialize(True, True, True)
         self.can.connect(
@@ -227,7 +230,7 @@ class TestDemo1:
         log_error(f"等待升级完成超时 ({timeout_s}s)，未检测到结束标志")
         return False
 
-    def _monitor_upgrade_stage(self, ecu_info_map, stage_name="高压升级阶段", timeout_s=600, can_id_whitelist=None, period_map=None):
+    def _monitor_upgrade_stage(self, ecu_info_map, stage_name="高压升级阶段", timeout_s=600, can_id_whitelist=None, period_map=None, bus_channel_map=None):
         """监控一个升级阶段，直到所有 ECU 完成或超时。"""
         start_time = time.time()
         total_ecu_count = len(ecu_info_map)
@@ -257,21 +260,101 @@ class TestDemo1:
             for c in wl:
                 bl[c] = period_map.get(c)
 
+        # 识别"无 ECU 的总线"：OTA.xlsx 里配了白名单 CANID、但没有 ECU 的总线。
+        # 这类总线不参与升级窗口/步骤检查，但白名单报文在整个升级期间仍要出现（按通道过滤校验）。
+        ecu_bus_names = {info["bus_name"] for info in ecu_info_map.values()}
+        no_ecu_bus_whitelist = {}   # bus_name -> whitelist_canids (set)
+        no_ecu_bus_periods = {}     # bus_name -> {canid: period_ms}
+        no_ecu_bus_box_channel = {} # bus_name -> box 通道号
+        for row in self.json_data.get("general", []):
+            bus_name = row.get("BUS NAME")
+            if not bus_name or not row.get("CANID"):
+                continue
+            if bus_name in ecu_bus_names and row.get("resp CANID"):
+                # 该 row 本身有 ECU（resp CANID 非空），属于 ECU 升级总线，跳过
+                continue
+            canids = set()
+            canid_list = []
+            for part in str(row["CANID"]).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    cid = int(part, 16)
+                except ValueError:
+                    continue
+                canids.add(cid)
+                canid_list.append(cid)
+            # 周期与 CANID 按逗号顺序一一对应
+            row_periods = {}
+            period_str = row.get("peroid")
+            if period_str:
+                for i, p in enumerate(str(period_str).split(",")):
+                    if i >= len(canid_list):
+                        break
+                    try:
+                        row_periods[canid_list[i]] = int(p.strip())
+                    except ValueError:
+                        continue
+            # 同一总线可能有多行无 ECU 配置（不同 CANID 组），CANID/周期合并；box 通道以首行为准
+            no_ecu_bus_whitelist.setdefault(bus_name, set()).update(canids)
+            no_ecu_bus_periods.setdefault(bus_name, {}).update(row_periods)
+            ch = row.get("channel bus")
+            no_ecu_bus_box_channel.setdefault(bus_name, (bus_channel_map or {}).get(int(ch)) if ch is not None else None)
+        for bus_name, wl in no_ecu_bus_whitelist.items():
+            period_detail = no_ecu_bus_periods.get(bus_name, {})
+            detail = ", ".join(
+                f"0x{c:03X}" + (f"={period_detail[c]}ms" if c in period_detail else "(无周期)")
+                for c in sorted(wl)
+            )
+            log_info(
+                f"[{stage_name}] 无 ECU 总线[{bus_name}] box通道={no_ecu_bus_box_channel.get(bus_name)} "
+                f"白名单({len(wl)}个): {detail}"
+            )
+
         # 每条总线一个窗口检查器（整条总线共享，每对 28 83 03/71 01 FF 01 00 判定一次）
+        # 先聚合本总线所有 ECU 的 reqid/respid：
+        #   - 开窗帧 CANID 需属于 0x7DF 或任一 ECU 的 reqid
+        #   - 关窗帧 CANID 需属于任一 ECU 的 respid（防止其它 ECU 相同载荷误关窗）
+        bus_req_canids = {}
+        bus_resp_canids = {}
+        # reqid/respid → ECU 名字（用于把功能寻址开窗帧归属到具体 ECU）
+        bus_req_owners = {}
+        bus_resp_owners = {}
+        for resp_canid, info in ecu_info_map.items():
+            bus_name = info["bus_name"]
+            ecu_name = f"{bus_name}-ECU{info['ecu_index']}"
+            bus_resp_canids.setdefault(bus_name, set()).add(resp_canid)
+            bus_resp_owners.setdefault(bus_name, {})[resp_canid] = ecu_name
+            req = info.get("req_canid")
+            if req:
+                bus_req_canids.setdefault(bus_name, set()).add(req)
+                bus_req_owners.setdefault(bus_name, {})[req] = ecu_name
+
         bus_checkers = {}
         for resp_canid, info in ecu_info_map.items():
             bus_name = info["bus_name"]
             if bus_name not in bus_checkers:
                 bus_channel = info.get("channel")
+                bus_req_set = bus_req_canids.get(bus_name, set())
                 bus_checkers[bus_name] = UpgradeWindowChecker(
                     ecu_name=bus_name,
                     whitelist_periods=bus_whitelist_periods.get(bus_name, {}),
                     valid_canids=bus_valid_canids.get(bus_name, set()),
                     func_canid=0x7DF,
-                    req_canid=info.get("req_canid"),
+                    req_canid=next(iter(bus_req_set), None),  # 占位，下面补充全部 reqid
                     channel=bus_channel,
+                    resp_canids=bus_resp_canids.get(bus_name, set()),
+                    req_owners=bus_req_owners.get(bus_name, {}),
+                    resp_owners=bus_resp_owners.get(bus_name, {}),
                 )
-                log_info(f"[窗口检查] 总线[{bus_name}] 按 channel={bus_channel} 单独 check")
+                # 开窗 CANID 集合补全本总线所有 ECU 的 reqid
+                bus_checkers[bus_name].boundary_canids |= bus_req_set
+                log_info(
+                    f"[窗口检查] 总线[{bus_name}] 按 channel={bus_channel} 单独 check, "
+                    f"reqid={sorted(f'0x{x:03X}' for x in bus_req_set)}, "
+                    f"respid={sorted(f'0x{x:03X}' for x in bus_resp_canids.get(bus_name, set()))}"
+                )
 
         ecu_monitors = {}
         for resp_canid, info in ecu_info_map.items():
@@ -298,6 +381,16 @@ class TestDemo1:
             }
             log_info(f"[{stage_name}] 添加 ECU 监控: {ecu_name}, resp=0x{resp_canid:03X}, req=0x{req_canid:03X}, channel={ecu_channel}, 白名单={len(whitelist_canids)}个")
 
+        # 白名单 CANID 归属表（按总线）：{canid: set(ecu_name)}，
+        # 用于"仅豁免当前升级 ECU 独占白名单"的缺失判定
+        bus_whitelist_owners = {}
+        for ecu_name, ecu_info in ecu_monitors.items():
+            owners = bus_whitelist_owners.setdefault(ecu_info["bus_name"], {})
+            for c in ecu_info["whitelist_canids"]:
+                owners.setdefault(c, set()).add(ecu_name)
+        for bus_name, chk in bus_checkers.items():
+            chk.set_whitelist_owners(bus_whitelist_owners.get(bus_name, {}))
+
         # 按 BUS NAME 分组，找出每个总线上最后一个 ECU（ECUindex 最大）
         bus_last_ecu = {}
         for resp_canid, info in ecu_info_map.items():
@@ -322,12 +415,32 @@ class TestDemo1:
         if signal_monitor:
             log_info(f"[{stage_name}] 启用 0x343 信号值全程监控，期望值={signal_cfg[0]['value']}")
 
+        # 各总线当前处于升级窗口阶段(5~23步)的 ECU 名字（用于窗口结果日志定位到具体 ECU）
+        bus_active_ecu = {}
+
+        # 无 ECU 总线的报文累积（升级全程，供结尾校验白名单是否出现）
+        no_ecu_all_msgs = []
+
+        def _window_label(bus_name, res):
+            time_range_str = (
+                f" [窗口时间: {res['start']:.6f}s ~ {res['end']:.6f}s]"
+                if res["start"] is not None and res["end"] is not None else ""
+            )
+            # 优先用开窗时锁定的归属 ECU（31 01 02 03 交互识别），未识别到再回退实时跟踪值
+            ecu_tag = res.get("ecu") or bus_active_ecu.get(bus_name, "")
+            prefix = f"[{bus_name}] {ecu_tag}" if ecu_tag else f"[{bus_name}]"
+            return f"{prefix} 升级窗口第{res['phase']}段(5~23步){time_range_str}"
+
         with log_step("Step2", stage_name):
             while time.time() - start_time < timeout_s and not all_done:
                 loop_count += 1
                 # 获取报文（已按时间排序）
                 all_msgs = self.can.get_received_messages(clear=True)
                 log_info(f"[{stage_name}] 第 {loop_count} 轮循环，收到 {len(all_msgs)} 帧报文")
+
+                # 无 ECU 总线白名单校验需要全程报文，累积起来（结尾一次性校验）
+                if all_msgs:
+                    no_ecu_all_msgs.extend(all_msgs)
 
                 # 0x343 信号值全程即时校验（只保留统计与证据，不缓存报文）
                 if signal_monitor and all_msgs:
@@ -361,6 +474,29 @@ class TestDemo1:
                 for ecu_name, ecu_info in ecu_monitors.items():
                     monitor = ecu_info["monitor"]
                     monitor.process_messages(all_msgs)
+
+                # 记录各总线上当前升级的 ECU 名字，供窗口结果日志定位/白名单豁免
+                for bus_name in bus_checkers:
+                    in_window = None   # (ecu_name, step) 处于窗口阶段(5~23步)的 ECU（首选）
+                    best = None        # (ecu_name, step) 已启动且未完成的 ECU（回退）
+                    for ecu_name, ecu_info in ecu_monitors.items():
+                        if ecu_info["bus_name"] != bus_name:
+                            continue
+                        m = ecu_info["monitor"]
+                        if 0 < m.current_step < 25 and not m.is_upgrade_success and not m.is_upgrade_complete:
+                            in_window = (ecu_name, m.current_step)
+                        if 3 <= m.current_step < 30 and not m.is_upgrade_complete:
+                            if best is None or m.current_step > best[1]:
+                                best = (ecu_name, m.current_step)
+                    # 首选窗口内 ECU；窗口内没有（步骤在本批内跃迁导致漏抓）时用回退
+                    target = in_window or best
+                    if target and bus_active_ecu.get(bus_name) != target[0]:
+                        log_info(f"[{bus_name}] 升级 ECU 跟踪: 归属 -> {target[0]} (step={target[1]})")
+                        bus_active_ecu[bus_name] = target[0]
+
+                # 同步当前升级 ECU 给窗口检查器（用于豁免该 ECU 独占白名单的缺失判定）
+                for bus_name, chk in bus_checkers.items():
+                    chk.set_active_ecu(bus_active_ecu.get(bus_name))
 
                 # 1. 先更新 step_gate（前4步完成允许开窗）——必须在 chk.process 之前
                 for bus_name, chk in bus_checkers.items():
@@ -401,11 +537,7 @@ class TestDemo1:
                 # ECU 开窗清空），这里逐段取出打印，保证每段窗口时间独立准确
                 for bus_name, chk in bus_checkers.items():
                     for res in chk.pop_unreported_results():
-                        time_range_str = (
-                            f" [窗口时间: {res['start']:.6f}s ~ {res['end']:.6f}s]"
-                            if res["start"] is not None and res["end"] is not None else ""
-                        )
-                        label = f"[{bus_name}] 升级窗口第{res['phase']}段(5~23步){time_range_str}"
+                        label = _window_label(bus_name, res)
                         if res["passed"]:
                             log_info(f"{label}检查 PASS: 白名单均出现且按周期发送, 无黑名单")
                         else:
@@ -490,11 +622,7 @@ class TestDemo1:
             for bus_name, chk in bus_checkers.items():
                 chk.finalize()
                 for res in chk.pop_unreported_results():
-                    time_range_str = (
-                        f" [窗口时间: {res['start']:.6f}s ~ {res['end']:.6f}s]"
-                        if res["start"] is not None and res["end"] is not None else ""
-                    )
-                    label = f"[{bus_name}] 升级窗口第{res['phase']}段(5~23步){time_range_str}"
+                    label = _window_label(bus_name, res)
                     if res["passed"]:
                         log_info(f"{label}检查 PASS: 白名单均出现且按周期发送, 无黑名单")
                     else:
@@ -519,6 +647,22 @@ class TestDemo1:
                 log_info(f"[{stage_name}] 0x343 信号值全程校验 PASS: {summary}")
             else:
                 log_error(f"[{stage_name}] 0x343 信号值全程校验 FAIL: {summary}")
+
+        # 无 ECU 总线白名单校验：ID 出现性 + 周期（升级结束后汇总判定，按 box 通道过滤）
+        for bus_name, wl in no_ecu_bus_whitelist.items():
+            if not wl:
+                continue
+            box_ch = no_ecu_bus_box_channel.get(bus_name)
+            ok, reasons = check_no_ecu_bus_whitelist(
+                no_ecu_all_msgs, wl,
+                period_map=no_ecu_bus_periods.get(bus_name, {}),
+                box_channel=box_ch,
+            )
+            if ok:
+                log_info(f"[{stage_name}] 无 ECU 总线[{bus_name}] 白名单校验 PASS ({len(wl)}个CANID均出现且周期正常)")
+            else:
+                for r in reasons:
+                    log_error(f"[{stage_name}] 无 ECU 总线[{bus_name}] 白名单校验 FAIL: {r}")
 
         return all_done
 
@@ -575,6 +719,7 @@ class TestDemo1:
             timeout_s=40 * 60,
             can_id_whitelist=self.can_id_whitelist,
             period_map=self.can_id_period_map,
+            bus_channel_map=self.bus_channel_map,
         ):
             time.sleep(2)
             log_error("UDS 30步升级流程监控失败")
