@@ -44,8 +44,8 @@
     "ECUindex": null,
     "req CANID": null,
     "resp CANID": null,
-    "CANID": null,
-    "peroid": null
+    "CANID": "0x1D2",
+    "peroid": 20
   },
   {
     "BUS NAME": "Body Extend CAN",
@@ -252,6 +252,30 @@
     "peroid": 100
   },
   {
+    "BUS NAME": "PowerTrain CANFD",
+    "box index": 1,
+    "box channel index": 3,
+    "channel bus": 7,
+    "ECUname": "BMS",
+    "ECUindex": 4,
+    "req CANID": "0x713",
+    "resp CANID": "0x793",
+    "CANID": "0x107",
+    "peroid": 10
+  },
+  {
+    "BUS NAME": "PowerTrain CANFD",
+    "box index": 1,
+    "box channel index": 3,
+    "channel bus": 7,
+    "ECUname": "CCU",
+    "ECUindex": 5,
+    "req CANID": "0x73D",
+    "resp CANID": "0x7BD",
+    "CANID": "0x1D3",
+    "peroid": 20
+  },
+  {
     "BUS NAME": "Comfort Extended CAN",
     "box index": 1,
     "box channel index": 2,
@@ -260,8 +284,8 @@
     "ECUindex": 1,
     "req CANID": "0x6FA",
     "resp CANID": "0x6FB",
-    "CANID": "0x2F2,0x1C2",
-    "peroid": "100,20"
+    "CANID": "0x1C2",
+    "peroid": "20"
   },
   {
     "BUS NAME": "Comfort Extended CAN",
@@ -284,8 +308,8 @@
     "ECUindex": 3,
     "req CANID": "0x661",
     "resp CANID": "0x669",
-    "CANID": "0x2F3,0x2F4",
-    "peroid": 100100
+    "CANID": "0x2F2,0x2F3,0x2F4",
+    "peroid": "100,100,100"
   },
   {
     "BUS NAME": null,

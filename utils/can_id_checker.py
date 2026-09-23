@@ -293,6 +293,7 @@ def build_ecu_info_map(general_list):
             "bus_name": item.get("BUS NAME"),
             "channel": item.get("channel bus"),
             "ecu_index": item.get("ECUindex"),
+            "ecu_name": item.get("ECUname"),
             "req_canid": req_canid,
             "whitelist_canids": whitelist_canids,
         }
@@ -844,7 +845,8 @@ class UpgradeWindowChecker:
 
     def __init__(self, ecu_name, whitelist_periods, valid_canids,
                  func_canid=0x7DF, req_canid=None, tolerance=0.1, reaction_time=3.0,
-                 channel=None, resp_canids=None, req_owners=None, resp_owners=None):
+                 channel=None, resp_canids=None, req_owners=None, resp_owners=None,
+                 reqids_configured=True, resp_by_ecu=None):
         self.ecu_name = ecu_name
         # channel 归一化为 int，防止驱动返回字符串类型导致比较失败
         if channel is not None:
@@ -867,6 +869,10 @@ class UpgradeWindowChecker:
         # 把功能寻址(0x7DF)的开窗帧归属到具体 ECU
         self._req_owners = req_owners or {}
         self._resp_owners = resp_owners or {}
+        # ECU 名字 → resp CANID（OTA.xlsx 里 req CANID 与 resp CANID 一一对应）。
+        # 关窗时校验：本段窗口由哪个 ECU 的 reqid 31 01 02 03 打开，
+        # 就必须由该 ECU 的 respid 发 71 01 FF 01 00 才能关，别的 ECU 不能关
+        self._resp_by_ecu = dict(resp_by_ecu) if resp_by_ecu else {}
         # 最近一次 31 01 02 03 交互对应的 ECU（待升级目标），开窗时锁定为本段归属
         self._pending_target_ecu = None
         # 当前打开窗口的归属 ECU（开窗时刻由 _pending_target_ecu 锁定）
@@ -881,7 +887,16 @@ class UpgradeWindowChecker:
         self.times = defaultdict(list)
         self.blacklist = set()
         self.blacklist_first = {}  # {canid: 首次出现时间戳}，用于打印黑名单证据
-        self.step_gate = False  # 前4步是否完成（外部设置）
+        # 按 ECU 独立的开窗预条件（31 01 02 03 检查编程条件交互已完成），
+        # 由 process 识别到 reqid 请求帧 / respid 响应帧时置位。
+        # 只有"控制本段窗口的那个 ECU"自己的预条件满足时才允许开窗，
+        # 避免同总线其它 ECU 的功能寻址(0x7DF)帧代满足依赖导致窗口提前打开。
+        self._ecu_gates = {}  # {ecu_name: bool}
+        # 当前控制窗口打开的 ECU 名字（None=未指定，退化为"任一 ECU 预条件满足即可"）
+        self._gated_ecu = None
+        # 本总线是否在 OTA.xlsx 里配置了 req CANID。
+        # 没有配置的总线：31 01 02 03 的 reqid 不在配置里，gate 永不满足，不开窗
+        self._reqids_configured = reqids_configured
         self.comm_control_seen = False  # 是否已收到 28 83 03
         self._pending_open_time = None  # step_gate 打开前缓存的 28 83 03 时间戳
         # 白名单 CANID 归属：{canid: set(ecu_name)}，用于"仅豁免当前升级 ECU 独占的白名单"
@@ -935,32 +950,50 @@ class UpgradeWindowChecker:
             # 待升级目标 ECU 识别：31 01 02 03(检查编程条件) 交互
             # - 请求 31 01 02 03 可能走 ECU 自身 reqid 或功能寻址 0x7DF
             # - 响应 71 01 02 03 xx 必走 ECU 自身 respid（最可靠的 ECU 身份信号）
-            # 用于给随后功能寻址(0x7DF)的开窗帧 28 83 03 归属到具体 ECU
+            # 用于给随后功能寻址(0x7DF)的开窗帧 28 83 03 归属到具体 ECU；
+            # 同时在此置位该 ECU 的开窗预条件(gate)——帧识别与 gate 置位共用剥过
+            # ISO-TP 头的 p，不再依赖外部预扫描（按原始 data 匹配会漏掉 04 帧头）
             if p and len(p) >= 4:
                 if p[:4] == [0x31, 0x01, 0x02, 0x03] and mid in self._req_owners:
-                    self._pending_target_ecu = self._req_owners[mid]
+                    ecu = self._req_owners[mid]
+                    self._pending_target_ecu = ecu
+                    self.set_ecu_gate(ecu, True)
                 elif p[:4] == [0x71, 0x01, 0x02, 0x03] and mid in self._resp_owners:
-                    self._pending_target_ecu = self._resp_owners[mid]
+                    ecu = self._resp_owners[mid]
+                    self._pending_target_ecu = ecu
+                    self.set_ecu_gate(ecu, True)
             # 窗口边界检测：直接通过 UDS 报文帧判定，时间戳精确
             if p and len(p) >= 3:
                 if mid in self.boundary_canids and p[:3] == [0x28, 0x83, 0x03] and (not self.opened or self.closed):
-                    # 开窗帧：28 83 03 功能寻址请求（需满足前4步完成 step_gate）。
-                    # CANID 须为本总线 0x7DF 或任一 ECU 的 reqid（boundary_canids 已聚合）
+                    # 开窗帧：28 83 03（控制通信请求，对应第5步）。
+                    # 必须满足"控制本段窗口的 ECU"自己的预条件
+                    # (reqid 31 01 02 03 → respid 71 01 02 03)才允许开窗，
+                    # 避免同总线其它 ECU 的功能寻址帧代满足依赖导致窗口提前打开
                     self.comm_control_seen = True
                     self._pending_open_time = t
-                    if self.step_gate:
+                    if self._gate_satisfied():
+                        # 28 83 03 必在控制 ECU 的 reqid 31 01 02 03 之后到达，
+                        # 此时该 ECU 的开窗预条件已满足，直接用该帧时间开窗
                         self._do_open_window(t)
+
                 elif (len(p) >= 5 and p[:5] == [0x71, 0x01, 0xFF, 0x01, 0x00]
-                      and self.opened and not self.closed
-                      and (not self._resp_canids or mid in self._resp_canids)):
+                      and self.opened and not self.closed):
                     # 关窗帧：71 01 FF 01 00（检查编程依赖性 31 01 FF 01 的正响应，
-                    # 对应第23步）。CANID 须为本总线某 ECU 的 respid，防止同通道
+                    # 对应第23步）。CANID 必须是"开本段窗口的 ECU"自己配置的 respid
+                    #（OTA.xlsx 里 req CANID 与 resp CANID 一一对应），防止同总线
                     # 其它 ECU 的相同载荷误关本段窗口
-                    self.closed = True
-                    self.window_close_time = t
-                    # 关窗时刻立即快照本段判定结果——同一批报文中若紧跟下一个
-                    # ECU 的开窗帧，本段数据会被 _do_open_window 清空导致结果丢失
-                    self._snapshot_phase(t)
+                    if self._close_canid_ok(mid):
+                        self.closed = True
+                        self.window_close_time = t
+                        # 关窗时刻立即快照本段判定结果——同一批报文中若紧跟下一个
+                        # ECU 的开窗帧，本段数据会被 _do_open_window 清空导致结果丢失
+                        self._snapshot_phase(t)
+                    else:
+                        # 诊断：关窗载荷对了但 CANID 不属于本段归属 ECU，忽略并打日志
+                        log_info(
+                            f"[{self.ecu_name}] 忽略关窗帧: CANID=0x{mid:03X} 不属于本段归属 ECU"
+                            f"({self._phase_ecu}), 载荷=71 01 FF 01 00"
+                        )
             # 窗口内累积（收到28 83 03后预留 reaction_time 秒 ECU 反应时间）
             if self.opened and not self.closed and self._in_check_window(t):
                 if mid in self.whitelist_periods:
@@ -998,20 +1031,58 @@ class UpgradeWindowChecker:
         # 开窗时刻锁定本段归属 ECU（来自开窗前 31 01 02 03 交互；未识别到则为 None）
         self._phase_ecu = self._pending_target_ecu
         self._pending_target_ecu = None
+        # 清空本次开窗前的 28 83 03 缓存，避免下一段用旧时间开窗
+        self._pending_open_time = None
+        log_info(
+            f"[{self.ecu_name}] 开窗 phase={self.phase}: 原始开窗帧@{t:.6f}s, "
+            f"检查区间自 {t + self.reaction_time:.6f}s (反应时间 {self.reaction_time}s), "
+            f"控制 ECU={self._gate_ecu()}, 归属 ECU={self._phase_ecu}"
+        )
         self.seen.clear()
         self.times.clear()
         self.blacklist.clear()
         self.blacklist_first.clear()
 
-    def set_step_gate(self, reached):
-        """外部调用：前4步(31→71→85序列)完成时设为 True。
-        之前缓存的28 83 03帧时间无效，清空后等待step_gate打开后新收到的28 83 03才开窗。
-        """
-        self.step_gate = reached
-        if reached:
-            # 清空step_gate之前的旧28 83 03缓存，避免用错误的旧时间开窗
-            self._pending_open_time = None
-            self.comm_control_seen = False
+    def _gate_ecu(self):
+        """返回当前控制窗口打开的 ECU 名字（None=无法确定，此时不开窗）。
+        优先用外部指定的 _gated_ecu，其次用开窗前 31 01 02 03 交互识别的 _pending_target_ecu。"""
+        return self._gated_ecu or self._pending_target_ecu
+
+    def _gate_satisfied(self):
+        """判断是否满足开窗预条件。
+        本总线没在 OTA.xlsx 配置 req CANID → False（31 01 02 03 的 reqid 不在配置里，不开窗）；
+        能确定控制 ECU 时：要求该 ECU 自己的预条件(reqid 31 01 02 03)满足；
+        无法确定控制 ECU 时：返回 False（不做 any() 兜底）——
+        否则上一段 ECU 遗留的 gate 会让未配置 ECU 的开窗帧混开新窗。"""
+        if not self._reqids_configured:
+            return False
+        ecu = self._gate_ecu()
+        if ecu is None:
+            return False
+        return self._ecu_gates.get(ecu, False)
+
+    def _close_canid_ok(self, can_id):
+        """关窗帧 CANID 校验：必须是配置过的 respid（OTA.xlsx）。
+        优先要求与"开本段窗口的 ECU"自己配置的 respid 精确匹配
+        （req CANID 与 resp CANID 一一对应，见 _resp_by_ecu），
+        防止同总线其它 ECU 相同载荷误关窗；
+        本段归属 ECU 识别不到时，回退为"本总线任一已配置 respid"；
+        本总线没配置任何 respid 时一律拒绝（窗口保持打开，
+        由 set_end_step / finalize 兜底关窗）。"""
+        phase_ecu = self._phase_ecu
+        if phase_ecu is not None and self._resp_by_ecu:
+            paired = self._resp_by_ecu.get(phase_ecu)
+            if paired is not None:
+                return can_id == paired
+        return can_id in self._resp_canids
+
+    def set_ecu_gate(self, ecu_name, reached):
+        """按 ECU 设置开窗预条件：process 识别到该 ECU 的 31 01 02 03 交互
+        （reqid 上收到请求帧 或 respid 上收到响应帧）后内部调用置 True。
+        开窗只在该 ECU 自己的依赖满足（31 01 02 03 检查编程条件已完成）后允许。"""
+        if reached and not self._ecu_gates.get(ecu_name, False):
+            log_info(f"[{self.ecu_name}] ECU[{ecu_name}] 开窗预条件满足 (检测到 31 01 02 03 交互)")
+        self._ecu_gates[ecu_name] = reached
 
     def set_end_step(self, reached, close_time=None):
         """外部调用：步骤23完成时设为 True，关闭窗口。"""
@@ -1035,6 +1106,20 @@ class UpgradeWindowChecker:
             # 本段窗口的归属 ECU（开窗前 31 01 02 03 交互识别；未识别到则为 None）
             "ecu": self._phase_ecu,
         })
+        # 单独一行打印本段升级窗口的时间信息（总线 + 升级 ECU + 第几段 + 开窗/关窗/耗时），
+        # 保证 .log 里每段升级窗口都有可检索的时间记录（精确关窗 / 步骤兜底 / finalize 兜底都会走到这里）
+        ecu_tag = self._phase_ecu or self._active_ecu or ""
+        prefix = f"[{self.ecu_name}] {ecu_tag}" if ecu_tag else f"[{self.ecu_name}]"
+        if start_t is not None and end_time is not None:
+            log_info(
+                f"{prefix} 升级窗口第{self.phase}段(5~23步) "
+                f"开窗={start_t:.6f}s 关窗={end_time:.6f}s 耗时={end_time - start_t:.3f}s"
+            )
+        else:
+            log_info(
+                f"{prefix} 升级窗口第{self.phase}段(5~23步) 开窗时间缺失 "
+                f"(start={start_t}, end={end_time})"
+            )
 
     def finalize(self):
         """收尾兜底：窗口仍打开（未收到关窗帧）时，用最后一帧时间关窗并快照。"""

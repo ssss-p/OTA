@@ -155,7 +155,8 @@ class TestDemo1:
         # 为每个 ECU 维护状态
         ecu_states = {}
         for resp_canid, info in ecu_info_map.items():
-            ecu_name = f"{info['bus_name']}-ECU{info['ecu_index']}"
+            # ECU 真实名字（OTA.xlsx 的 ECUname 列）；没有则回退 总线名-ECU序号
+            ecu_name = (info.get("ecu_name") or "").strip() or f"{info['bus_name']}-ECU{info['ecu_index']}"
             ecu_states[resp_canid] = {
                 "name": ecu_name,
                 "seen_dids": set(),
@@ -321,11 +322,16 @@ class TestDemo1:
         # reqid/respid → ECU 名字（用于把功能寻址开窗帧归属到具体 ECU）
         bus_req_owners = {}
         bus_resp_owners = {}
+        # ECU 名字 → resp CANID（OTA.xlsx 里 req CANID 与 resp CANID 一一对应，
+        # 关窗时校验：本段窗口的 ECU 必须用它自己配置的 respid 发 71 01 FF 01 00 才能关）
+        resp_by_ecu = {}
         for resp_canid, info in ecu_info_map.items():
             bus_name = info["bus_name"]
-            ecu_name = f"{bus_name}-ECU{info['ecu_index']}"
+            # ECU 真实名字（OTA.xlsx 的 ECUname 列）；没有则回退 总线名-ECU序号
+            ecu_name = (info.get("ecu_name") or "").strip() or f"{bus_name}-ECU{info['ecu_index']}"
             bus_resp_canids.setdefault(bus_name, set()).add(resp_canid)
             bus_resp_owners.setdefault(bus_name, {})[resp_canid] = ecu_name
+            resp_by_ecu[ecu_name] = resp_canid
             req = info.get("req_canid")
             if req:
                 bus_req_canids.setdefault(bus_name, set()).add(req)
@@ -347,6 +353,10 @@ class TestDemo1:
                     resp_canids=bus_resp_canids.get(bus_name, set()),
                     req_owners=bus_req_owners.get(bus_name, {}),
                     resp_owners=bus_resp_owners.get(bus_name, {}),
+                    # 本总线是否配置了 req CANID（OTA.xlsx）；没配置的总线 gate 永不满足，不开窗
+                    reqids_configured=bool(bus_req_set),
+                    # ECU 名字 → resp CANID 配对表：关窗帧必须来自"开本段窗口的 ECU"自己配置的 respid
+                    resp_by_ecu=resp_by_ecu,
                 )
                 # 开窗 CANID 集合补全本总线所有 ECU 的 reqid
                 bus_checkers[bus_name].boundary_canids |= bus_req_set
@@ -358,7 +368,8 @@ class TestDemo1:
 
         ecu_monitors = {}
         for resp_canid, info in ecu_info_map.items():
-            ecu_name = f"{info['bus_name']}-ECU{info['ecu_index']}"
+            # ECU 真实名字（OTA.xlsx 的 ECUname 列）；没有则回退 总线名-ECU序号
+            ecu_name = (info.get("ecu_name") or "").strip() or f"{info['bus_name']}-ECU{info['ecu_index']}"
             req_canid = info.get("req_canid") or 0x700
             whitelist_canids = info.get("whitelist_canids", set())
             # 该 ECU 的合法 CANID = 白名单 + reqid + respid + 功能寻址 0x7DF
@@ -397,10 +408,12 @@ class TestDemo1:
             bus_name = info["bus_name"]
             ecu_index = info.get("ecu_index") or 0
             if bus_name not in bus_last_ecu or ecu_index > bus_last_ecu[bus_name]["ecu_index"]:
+                # ECU 真实名字（OTA.xlsx 的 ECUname 列）；没有则回退 总线名-ECU序号
+                last_ecu_name = (info.get("ecu_name") or "").strip() or f"{bus_name}-ECU{ecu_index}"
                 bus_last_ecu[bus_name] = {
                     "resp_canid": resp_canid,
                     "ecu_index": ecu_index,
-                    "ecu_name": f"{bus_name}-ECU{ecu_index}",
+                    "ecu_name": last_ecu_name,
                 }
 
         # 等待所有 ECU 的最后一个完成
@@ -498,21 +511,14 @@ class TestDemo1:
                 for bus_name, chk in bus_checkers.items():
                     chk.set_active_ecu(bus_active_ecu.get(bus_name))
 
-                # 1. 先更新 step_gate（前4步完成允许开窗）——必须在 chk.process 之前
-                for bus_name, chk in bus_checkers.items():
-                    if not chk.step_gate:
-                        for ecu_name, ecu_info in ecu_monitors.items():
-                            if ecu_info["bus_name"] == bus_name and ecu_info["monitor"].current_step >= 5:
-                                chk.set_step_gate(True)
-                                break
-
-                # 2. 让 chk.process 先处理报文——优先精确检测 28 83 03(开窗) 和 71 01 FF 01 00(关窗) 帧
-                #    此时 step_gate 已正确置位，不会用旧缓存开窗；71 01 FF 01 00 能被正确识别记录精确关窗时间
+                # 1. 让 chk.process 处理报文——优先精确检测 28 83 03(开窗) 和 71 01 FF 01 00(关窗) 帧。
+                #    开窗预条件(gate)已在 process 内部随 31 01 02 03 交互识别时置位
+                #    （基于剥过 ISO-TP 头的载荷，reqid 请求帧 / respid 响应帧均可识别），无需外部预扫描
                 for bus_name, chk in bus_checkers.items():
                     if all_msgs:
                         chk.process(all_msgs)
 
-                # 3. 兜底关窗：只有当 chk 还没通过 71 01 FF 01 00 帧关窗，且本总线上
+                # 2. 兜底关窗：只有当 chk 还没通过 71 01 FF 01 00 帧关窗，且本总线上
                 #    所有 ECU 都已过窗口阶段（没有任何 ECU 处于 0 < step < 25，
                 #    即没有 ECU 正在 5~24 步之间）时才兜底。
                 #    注意：同总线顺序升级时，第1个 ECU 完成后 current_step=30>=24，
