@@ -8,8 +8,8 @@
     "ECUindex": 1,
     "req CANID": "0x70D",
     "resp CANID": "0x78D",
-    "CANID": "0x55A,0x3B4,0x1D2,0x3B3,0x2B0,0x0A4",
-    "peroid": "200,100,20,100,50,100"
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Connected CANFD",
@@ -44,8 +44,8 @@
     "ECUindex": null,
     "req CANID": null,
     "resp CANID": null,
-    "CANID": "0x1D2",
-    "peroid": 20
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Body Extend CAN",
@@ -56,8 +56,8 @@
     "ECUindex": 1,
     "req CANID": "0x701",
     "resp CANID": "0x781",
-    "CANID": "0x1C2",
-    "peroid": 20
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Body CANFD",
@@ -68,8 +68,8 @@
     "ECUindex": 1,
     "req CANID": "0x775",
     "resp CANID": "0x77D",
-    "CANID": "0x1D2",
-    "peroid": 20
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Safety CANFD",
@@ -80,8 +80,8 @@
     "ECUindex": 1,
     "req CANID": "0x72B",
     "resp CANID": "0x7AB",
-    "CANID": "0x1D2",
-    "peroid": 20
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Comfort CANFD",
@@ -92,8 +92,8 @@
     "ECUindex": 1,
     "req CANID": "0x677",
     "resp CANID": "0x67F",
-    "CANID": "0x1D2",
-    "peroid": 20
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Comfort CAN",
@@ -104,8 +104,8 @@
     "ECUindex": 1,
     "req CANID": "0x752",
     "resp CANID": "0x7D2",
-    "CANID": "0x1C2",
-    "peroid": 20
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Comfort CAN",
@@ -176,8 +176,8 @@
     "ECUindex": 1,
     "req CANID": "0x7F1",
     "resp CANID": "0x7F9",
-    "CANID": "0x343,0x1D2",
-    "peroid": "100,20"
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Chassis CANFD",
@@ -224,8 +224,8 @@
     "ECUindex": 1,
     "req CANID": "0x71A",
     "resp CANID": "0x79A",
-    "CANID": "0x313,0x181",
-    "peroid": "100,20"
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "PowerTrain CANFD",
@@ -248,8 +248,8 @@
     "ECUindex": 3,
     "req CANID": "0x717",
     "resp CANID": "0x797",
-    "CANID": "0x331",
-    "peroid": 100
+    "CANID": "0x331,0x313,0x181",
+    "peroid": "100,100,20"
   },
   {
     "BUS NAME": "PowerTrain CANFD",
@@ -272,8 +272,8 @@
     "ECUindex": 5,
     "req CANID": "0x73D",
     "resp CANID": "0x7BD",
-    "CANID": "0x1D3",
-    "peroid": 20
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Comfort Extended CAN",
@@ -284,8 +284,8 @@
     "ECUindex": 1,
     "req CANID": "0x6FA",
     "resp CANID": "0x6FB",
-    "CANID": "0x1C2",
-    "peroid": "20"
+    "CANID": null,
+    "peroid": null
   },
   {
     "BUS NAME": "Comfort Extended CAN",

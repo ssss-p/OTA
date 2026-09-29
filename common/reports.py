@@ -16,16 +16,24 @@ class Reports:
         result_json_list = sorted(result_json_list, key=lambda x: x[1])
         return result_json_list
 
+    @staticmethod
+    def _flatten_steps(steps, prefix=""):
+        """把嵌套 step 拍平成列表（子层加 '└ ' 前缀保留层级）。
+        窗口结果的"检查 PASS/FAIL"日志打在 log_step("Step2") 内部，
+        在 result.json 里属于嵌套 step，不拍平则报告里看不到。"""
+        flat = []
+        for item in steps:
+            flat.append([item.get("status", "passed"), f"{prefix}{item.get('name', '')}"])
+            flat.extend(Reports._flatten_steps(item.get("steps", []), f"{prefix}└ "))
+        return flat
+
     def report_excel_parse_result_json_files(self, result_json_list):
         result_list = []
         for item in result_json_list:
             with open(item[0], "r", encoding="utf-8") as f:
                 one_case_result_data = json.load(f)
 
-            steps = one_case_result_data.get("steps", [])
-            steps_list = []
-            for item in steps:
-                steps_list.append([item["status"], item["name"]])
+            steps_list = self._flatten_steps(one_case_result_data.get("steps", []))
 
             parent_suite = ""
             suite = ""
@@ -137,10 +145,25 @@ class Reports:
             status_class = "status-pass" if status == "passed" else "status-fail" if status == "failed" else "status-skip"
             status_text = status.upper()
 
+            # HTML 只展示窗口检查结果行（检查 PASS / 检查 FAIL），
+            # "步骤0 等待开始..."等轮询日志不进 HTML（.log 里仍有）
+            check_steps = [
+                (s, n) for s, n in item["steps"]
+                if "检查 PASS" in n or "检查 FAIL" in n
+            ]
             steps_html = ""
-            for step_status, step_name in item["steps"]:
-                step_class = "status-pass" if step_status == "passed" else "status-fail" if step_status == "failed" else "status-skip"
-                steps_html += f'<div class="step"><span class="step-badge {step_class}">{step_status.upper()}</span>{step_name}</div>'
+            if not check_steps:
+                steps_html = '<div class="step">无窗口检查结果</div>'
+            for step_status, step_name in check_steps:
+                # log_error_continue 的 step 在 allure 里状态是 passed，
+                # 按文本识别"❌ / 检查 FAIL"统一标红，避免误显示绿色
+                if step_status == "failed" or "❌" in step_name or "检查 FAIL" in step_name:
+                    step_class, badge = "status-fail", "FAIL"
+                elif step_status == "skipped":
+                    step_class, badge = "status-skip", "SKIP"
+                else:
+                    step_class, badge = "status-pass", "PASS"
+                steps_html += f'<div class="step"><span class="step-badge {step_class}">{badge}</span>{step_name}</div>'
 
             rows.append(f"""
                 <tr>
@@ -151,7 +174,7 @@ class Reports:
                     <td><span class="badge {status_class}">{status_text}</span></td>
                     <td>
                         <details>
-                            <summary>查看步骤 ({len(item['steps'])})</summary>
+                            <summary>查看检查结果 ({len(check_steps)})</summary>
                             <div class="steps">{steps_html}</div>
                         </details>
                     </td>

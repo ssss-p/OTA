@@ -19,6 +19,17 @@ def pytest_configure(config):
         new_name = f"{base_name}_{now}.html"
         config.option.htmlpath = os.path.join(reports_dir, new_name)
 
+    # 清空 allure-results 里历史运行的 result.json，
+    # 保证本次生成的 HTML 报告只包含当前运行的结果
+    allure_dir = config.option.allure_report_dir
+    if allure_dir and os.path.isdir(allure_dir):
+        for name in os.listdir(allure_dir):
+            path = os.path.join(allure_dir, name)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):

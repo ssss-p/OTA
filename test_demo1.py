@@ -248,9 +248,13 @@ class TestDemo1:
             return False
 
         # 构建 ECU 监控器（基于 ecu_info_map）
-        # 先按总线聚合：同一条总线的所有 ECU 的白名单/req/resp 合并，作为整条总线的合法 CANID
+        # 按总线聚合：同一条总线的所有 ECU 的白名单/req/resp 合并，作为整条总线的合法 CANID
         bus_valid_canids = {}   # bus_name -> set(合法CANID并集)
         bus_whitelist_periods = {}  # bus_name -> {canid: period_ms or None}
+        # common sheet 总线级白名单（格式同 general，按 BUS NAME 分组）：
+        # 该总线任意 ECU 升级窗口期内都要检查出现性 + 周期；
+        # 不归属任何 ECU（general 的 CANID 列），因此不享受"豁免当前升级 ECU 独占 CANID"
+        common_bus_whitelist = build_bus_whitelist(self.json_data.get("common", []))
         for resp_canid, info in ecu_info_map.items():
             bus_name = info["bus_name"]
             req = info.get("req_canid") or 0x700
@@ -260,6 +264,14 @@ class TestDemo1:
             bl = bus_whitelist_periods.setdefault(bus_name, {})
             for c in wl:
                 bl[c] = period_map.get(c)
+
+        # 窗口检查白名单 = general 聚合 ∪ common；同一 CANID 周期冲突时 common 优先。
+        # common 的 CANID 也要加入合法集合，否则会被误判为黑名单
+        for bus_name, common_map in common_bus_whitelist.items():
+            merged = dict(bus_whitelist_periods.get(bus_name, {}))
+            merged.update(common_map)
+            bus_whitelist_periods[bus_name] = merged
+            bus_valid_canids.setdefault(bus_name, set()).update(common_map)
 
         # 识别"无 ECU 的总线"：OTA.xlsx 里配了白名单 CANID、但没有 ECU 的总线。
         # 这类总线不参与升级窗口/步骤检查，但白名单报文在整个升级期间仍要出现（按通道过滤校验）。
@@ -302,6 +314,13 @@ class TestDemo1:
             no_ecu_bus_periods.setdefault(bus_name, {}).update(row_periods)
             ch = row.get("channel bus")
             no_ecu_bus_box_channel.setdefault(bus_name, (bus_channel_map or {}).get(int(ch)) if ch is not None else None)
+        # common sheet 白名单同样适用于"无 ECU 总线"：整个升级期间都要出现且周期正常
+        for bus_name, common_map in common_bus_whitelist.items():
+            if bus_name in ecu_bus_names:
+                continue  # 有 ECU 的总线走窗口检查，不重复
+            no_ecu_bus_whitelist.setdefault(bus_name, set()).update(common_map)
+            no_ecu_bus_periods.setdefault(bus_name, {}).update(common_map)
+            no_ecu_bus_box_channel.setdefault(bus_name, None)
         for bus_name, wl in no_ecu_bus_whitelist.items():
             period_detail = no_ecu_bus_periods.get(bus_name, {})
             detail = ", ".join(
@@ -623,6 +642,18 @@ class TestDemo1:
                     log_info(f"等待 ECU 开始升级... 已完成 {len(completed)}/{total_ecu_count}")
 
                 time.sleep(0.5)
+
+            # 监控结束时（完成或超时退出）打印一次各 ECU 的最终升级情况，
+            # 避免超时退出时未完成 ECU 的最终状态从未被打印
+            log_info(f"=== {stage_name} 结束, 各 ECU 最终升级情况 ===")
+            for ecu_name, ecu_info in ecu_monitors.items():
+                m = ecu_info["monitor"]
+                log_info(
+                    f"[{ecu_name}] 最终升级情况: 步骤{m.current_step} {m.current_desc}, "
+                    f"升级成功={m.is_upgrade_success}, 升级完成={m.is_upgrade_complete}, "
+                    f"进度={m.get_progress_summary()['progress_pct']:.0f}%, "
+                    f"耗时={m.get_elapsed_time():.2f}s"
+                )
 
             # 兜底：窗口已打开但未收到关窗帧（超时/提前结束）也判定一次
             for bus_name, chk in bus_checkers.items():
