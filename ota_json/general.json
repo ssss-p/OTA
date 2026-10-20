@@ -25,7 +25,7 @@
   },
   {
     "BUS NAME": "Connected CANFD",
-    "box index": 2,
+    "box index": 0,
     "box channel index": 3,
     "channel bus": 3,
     "ECUname": "NFCAM",
@@ -40,7 +40,7 @@
     "box index": 0,
     "box channel index": 2,
     "channel bus": 2,
-    "ECUname": null,
+    "ECUname": "CDC",
     "ECUindex": null,
     "req CANID": null,
     "resp CANID": null,
