@@ -1,8 +1,8 @@
 [
   {
     "Msg ID": "0x343",
-    "Startbit": 46,
-    "len": 2,
-    "value": 1
+    "Startbit": "46",
+    "len": "2",
+    "value": "1"
   }
 ]

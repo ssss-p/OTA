@@ -30,14 +30,24 @@ class TestDemo1:
         test_name = os.environ.get('PYTEST_CURRENT_TEST')
         log_info(f"[SETUP] {test_name}")
 
-        # 每次运行前，自动把 OTA.xlsx 转换为 json
-        log_info("正在转换 OTA.xlsx 到 JSON...")
-        self.ota_data = xlsx_to_json("OTA.xlsx", "ota_json")
-        log_info(f"已转换 {len(self.ota_data)} 个 sheet")
+        # 优先使用图形化界面生成的 ota_json/*.json；
+        # 仅当目录里没有 json 且存在 OTA.xlsx 时，才从 Excel 兜底转换一次
+        json_dir = "ota_json"
+        existing = [f for f in os.listdir(json_dir) if f.endswith(".json")] if os.path.isdir(json_dir) else []
+        if existing:
+            log_info(f"使用界面生成的配置（{len(existing)} 个 json）: {existing}")
+        elif os.path.isfile("OTA.xlsx"):
+            log_info("ota_json 无配置，正在从 OTA.xlsx 兜底转换...")
+            xlsx_to_json("OTA.xlsx", json_dir)
+        else:
+            raise FileNotFoundError(
+                "ota_json 目录没有 json 配置：请先在图形化界面填写并保存，或提供 OTA.xlsx"
+            )
 
         # 读取所有 json 文件到变量
         log_info("正在读取 JSON 文件...")
-        self.json_data = load_json_files("ota_json")
+        self.json_data = load_json_files(json_dir)
+        self.ota_data = self.json_data
         log_info(f"已读取 {len(self.json_data)} 个 JSON 文件")
 
         # 初始化 CAN 设备（通道映射全部来自 OTA.xlsx general 表）
